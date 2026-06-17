@@ -1,0 +1,25 @@
+{
+    "name": "Doctor亿万 - 宠物全生命周期医疗平台",
+    "short_name": "Doctor亿万",
+    "description": "宠物全生命周期医疗平台 - 查找附近宠物医院、管理宠物健康档案",
+    "start_url": "./index.html",
+    "display": "standalone",
+    "background_color": "#FBF9FF",
+    "theme_color": "#6C3CE7",
+    "orientation": "portrait",
+    "categories": ["medical", "pets", "health"],
+    "icons": [
+        {
+            "src": "./icons/icon-192.png",
+            "sizes": "192x192",
+            "type": "image/png",
+            "purpose": "any maskable"
+        },
+        {
+            "src": "./icons/icon-512.png",
+            "sizes": "512x512",
+            "type": "image/png",
+            "purpose": "any maskable"
+        }
+    ]
+}
