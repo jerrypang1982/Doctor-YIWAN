@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -477,6 +478,346 @@
     };
 
 
+
+    // ====== 云端数据服务（CloudDataService）======
+    const CloudService = {
+        _syncing: false,
+        _currentUser: null,
+
+        // 检查登录状态
+        async checkAuth() {
+            if (!supabase) return null;
+            try {
+                const { data: { user } } = await supabase.auth.getUser();
+                this._currentUser = user;
+                return user;
+            } catch(e) { return null; }
+        },
+
+        // 注册
+        async signUp(email, password) {
+            if (!supabase) return { ok: false, msg: '后端未连接' };
+            try {
+                const { data, error } = await supabase.auth.signUp({ email, password });
+                if (error) return { ok: false, msg: error.message };
+                // 创建 profile
+                if (data.user) {
+                    await supabase.from('profiles').upsert({
+                        id: data.user.id,
+                        nickname: email.split('@')[0],
+                        phone: ''
+                    });
+                }
+                return { ok: true, msg: '注册成功！请检查邮箱验证' };
+            } catch(e) { return { ok: false, msg: '注册失败: ' + e.message }; }
+        },
+
+        // 登录
+        async signIn(email, password) {
+            if (!supabase) return { ok: false, msg: '后端未连接' };
+            try {
+                const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+                if (error) return { ok: false, msg: error.message };
+                this._currentUser = data.user;
+                return { ok: true, msg: '登录成功' };
+            } catch(e) { return { ok: false, msg: '登录失败' }; }
+        },
+
+        // 登出
+        async signOut() {
+            if (!supabase) return;
+            await supabase.auth.signOut();
+            this._currentUser = null;
+        },
+
+        // 上传宠物头像到 Storage
+        async uploadPetPhoto(userId, petLocalId, base64Data) {
+            if (!supabase || !base64Data) return '';
+            try {
+                // 从 base64 提取二进制数据
+                const base64Str = base64Data.split(',')[1];
+                const binaryStr = atob(base64Str);
+                const bytes = new Uint8Array(binaryStr.length);
+                for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
+                const blob = new Blob([bytes], { type: 'image/jpeg' });
+
+                const fileName = userId + '/' + petLocalId + '_' + Date.now() + '.jpg';
+                const { error } = await supabase.storage.from('pet-avatars').upload(fileName, blob, { upsert: true });
+                if (error) return base64Data; // 失败时回退到 base64
+
+                const { data: urlData } = supabase.storage.from('pet-avatars').getPublicUrl(fileName);
+                return urlData.publicUrl;
+            } catch(e) { console.log('[Cloud] 头像上传失败', e); return base64Data; }
+        },
+
+        // 上传医疗附件到 Storage
+        async uploadMedicalFile(userId, fileName, base64Data, fileType) {
+            if (!supabase || !base64Data) return '';
+            try {
+                const base64Str = base64Data.split(',')[1];
+                const binaryStr = atob(base64Str);
+                const bytes = new Uint8Array(binaryStr.length);
+                for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
+                const blob = new Blob([bytes], { type: fileType });
+
+                const path = userId + '/' + Date.now() + '_' + fileName;
+                const { error } = await supabase.storage.from('medical-files').upload(path, blob, { upsert: true });
+                if (error) return '';
+
+                // 返回存储路径
+                return path;
+            } catch(e) { console.log('[Cloud] 附件上传失败', e); return ''; }
+        },
+
+        // 下载附件
+        getMedicalFileUrl(path) {
+            if (!supabase || !path) return '';
+            try {
+                const { data } = supabase.storage.from('medical-files').getPublicUrl(path);
+                // medical-files bucket 是私有的，需要签名URL
+                // 对于私有bucket，用createSignedUrl
+                return data.publicUrl;
+            } catch(e) { return ''; }
+        },
+
+        // 获取签名URL（私有bucket用）
+        async getSignedUrl(path) {
+            if (!supabase || !path) return '';
+            try {
+                const { data, error } = await supabase.storage.from('medical-files').createSignedUrl(path, 3600);
+                if (error || !data) return '';
+                return data.signedUrl;
+            } catch(e) { return ''; }
+        },
+
+        // 全量同步到云端
+        async syncToCloud(data) {
+            if (!this._currentUser || this._syncing) return false;
+            this._syncing = true;
+            const userId = this._currentUser.id;
+            try {
+                // 同步宠物
+                for (const pet of (data.pets || [])) {
+                    const petRow = {
+                        user_id: userId,
+                        local_id: pet.id,
+                        name: pet.name || '',
+                        species: pet.species || 'dog',
+                        breed: pet.breed || '',
+                        age: pet.age || 0,
+                        weight: pet.weight || 0,
+                        gender: pet.gender || 'male',
+                        photo_url: pet.photo_url || '',
+                        updated_at: new Date().toISOString()
+                    };
+                    const { data: existing } = await supabase.from('pets').select('id').eq('user_id', userId).eq('local_id', pet.id).maybeSingle();
+                    if (existing) {
+                        await supabase.from('pets').update(petRow).eq('id', existing.id);
+                    } else {
+                        await supabase.from('pets').insert(petRow);
+                    }
+                }
+
+                // 同步疫苗记录
+                for (const vac of (data.vaccinations || [])) {
+                    const vacRow = {
+                        user_id: userId,
+                        pet_local_id: vac.petId,
+                        name: vac.name || '',
+                        vaccine_date: vac.date || '',
+                        next_date: vac.nextDate || '',
+                        notes: vac.notes || '',
+                        updated_at: new Date().toISOString()
+                    };
+                    const { data: existing } = await supabase.from('vaccinations').select('id').eq('user_id', userId).eq('pet_local_id', vac.petId).eq('name', vac.name).eq('vaccine_date', vac.date || '').maybeSingle();
+                    if (existing) {
+                        await supabase.from('vaccinations').update(vacRow).eq('id', existing.id);
+                    } else {
+                        await supabase.from('vaccinations').insert(vacRow);
+                    }
+                }
+
+                // 同步就诊记录（不含附件base64，附件单独上传）
+                for (const rec of (data.medicalRecords || [])) {
+                    const recRow = {
+                        user_id: userId,
+                        pet_local_id: rec.petId,
+                        service: rec.service || '',
+                        record_date: rec.date || '',
+                        diagnosis: rec.diagnosis || '',
+                        cost: rec.cost || 0,
+                        hospital: rec.hospital || '',
+                        notes: rec.notes || '',
+                        updated_at: new Date().toISOString()
+                    };
+                    const { data: existing } = await supabase.from('medical_records').select('id').eq('user_id', userId).eq('pet_local_id', rec.petId).eq('service', rec.service || '').eq('record_date', rec.date || '').maybeSingle();
+                    if (existing) {
+                        await supabase.from('medical_records').update(recRow).eq('id', existing.id);
+                    } else {
+                        const { data: inserted } = await supabase.from('medical_records').insert(recRow).select('id').single();
+                        if (inserted && rec.attachments && rec.attachments.length > 0) {
+                            // 上传附件
+                            for (const att of rec.attachments) {
+                                if (att.data) {
+                                    const filePath = await this.uploadMedicalFile(userId, att.name, att.data, att.type);
+                                    if (filePath) {
+                                        await supabase.from('medical_attachments').insert({
+                                            record_id: inserted.id,
+                                            user_id: userId,
+                                            file_url: filePath,
+                                            file_name: att.name,
+                                            file_type: att.type,
+                                            file_size: att.size || 0
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 同步收藏
+                for (const fav of (data.favorites || [])) {
+                    if (typeof fav === 'string') {
+                        // 旧格式是字符串POI ID
+                        await supabase.from('favorites').upsert({ user_id: userId, poi_id: fav, poi_name: '' }, { onConflict: 'user_id,poi_id' });
+                    } else if (fav && fav.id) {
+                        await supabase.from('favorites').upsert({ user_id: userId, poi_id: fav.id, poi_name: fav.name || '' }, { onConflict: 'user_id,poi_id' });
+                    }
+                }
+
+                // 同步用户信息
+                await supabase.from('profiles').update({
+                    nickname: data.user?.name || '',
+                    phone: data.user?.phone || '',
+                    updated_at: new Date().toISOString()
+                }).eq('id', userId);
+
+                console.log('[Cloud] 同步完成');
+                this._syncing = false;
+                return true;
+            } catch(e) {
+                console.log('[Cloud] 同步失败', e);
+                this._syncing = false;
+                return false;
+            }
+        },
+
+        // 从云端加载数据
+        async loadFromCloud() {
+            if (!this._currentUser) return null;
+            const userId = this._currentUser.id;
+            try {
+                const [petsRes, vacsRes, recordsRes, favsRes, profileRes] = await Promise.all([
+                    supabase.from('pets').select('*').eq('user_id', userId),
+                    supabase.from('vaccinations').select('*').eq('user_id', userId),
+                    supabase.from('medical_records').select('*').eq('user_id', userId),
+                    supabase.from('favorites').select('*').eq('user_id', userId),
+                    supabase.from('profiles').select('*').eq('id', userId).maybeSingle()
+                ]);
+
+                const pets = (petsRes.data || []).map(p => ({
+                    id: p.local_id || 'cp_' + p.id,
+                    name: p.name,
+                    species: p.species,
+                    breed: p.breed,
+                    age: p.age,
+                    weight: p.weight,
+                    gender: p.gender,
+                    photo: p.photo_url || '',
+                    photo_url: p.photo_url || ''
+                }));
+
+                const vaccinations = (vacsRes.data || []).map(v => ({
+                    id: 'cv_' + v.id,
+                    petId: v.pet_local_id,
+                    name: v.name,
+                    date: v.vaccine_date,
+                    nextDate: v.next_date,
+                    notes: v.notes
+                }));
+
+                // 就诊记录需要加载附件
+                const records = [];
+                for (const r of (recordsRes.data || [])) {
+                    const rec = {
+                        id: 'cr_' + r.id,
+                        petId: r.pet_local_id,
+                        service: r.service,
+                        date: r.record_date,
+                        diagnosis: r.diagnosis,
+                        cost: r.cost,
+                        hospital: r.hospital,
+                        notes: r.notes,
+                        attachments: []
+                    };
+                    // 加载附件元数据
+                    const { data: atts } = await supabase.from('medical_attachments').select('*').eq('record_id', r.id);
+                    if (atts && atts.length > 0) {
+                        rec.attachments = atts.map(a => ({
+                            name: a.file_name,
+                            type: a.file_type,
+                            size: a.file_size,
+                            data: '', // 不下载base64，用URL
+                            file_url: a.file_url, // Storage路径
+                            id: a.id
+                        }));
+                    }
+                    records.push(rec);
+                }
+
+                const favorites = (favsRes.data || []).map(f => ({ id: f.poi_id, name: f.poi_name }));
+
+                const profile = profileRes.data;
+
+                return {
+                    pets,
+                    vaccinations,
+                    medicalRecords: records,
+                    favorites,
+                    user: {
+                        name: profile?.nickname || '',
+                        phone: profile?.phone || '',
+                        email: this._currentUser.email || '',
+                        alipayBound: false,
+                        wechatBound: false
+                    }
+                };
+            } catch(e) {
+                console.log('[Cloud] 加载失败', e);
+                return null;
+            }
+        },
+
+        // 从云端删除宠物
+        async deletePet(petLocalId) {
+            if (!this._currentUser) return;
+            const userId = this._currentUser.id;
+            try {
+                await supabase.from('pets').delete().eq('user_id', userId).eq('local_id', petLocalId);
+                await supabase.from('vaccinations').delete().eq('user_id', userId).eq('pet_local_id', petLocalId);
+                // 删除相关就诊记录及其附件
+                const { data: records } = await supabase.from('medical_records').select('id').eq('user_id', userId).eq('pet_local_id', petLocalId);
+                if (records && records.length > 0) {
+                    const recordIds = records.map(r => r.id);
+                    await supabase.from('medical_attachments').delete().in('record_id', recordIds);
+                    await supabase.from('medical_records').delete().in('id', recordIds);
+                }
+            } catch(e) { console.log('[Cloud] 删除宠物失败', e); }
+        }
+    };
+
+    // 云端同步节流：避免频繁写入
+    let _cloudSyncTimer = null;
+    function debouncedCloudSync() {
+        if (_cloudSyncTimer) clearTimeout(_cloudSyncTimer);
+        _cloudSyncTimer = setTimeout(() => {
+            if (CloudService._currentUser) {
+                CloudService.syncToCloud(appData);
+            }
+        }, 2000); // 2秒节流
+    }
+
     // ====== 本地数据管理 ======
     const STORAGE_KEY='doctor_yiyi_data';
     function getAppData(){
@@ -501,7 +842,7 @@
     }
     let appData=getAppData()||getInitData();
 
-    function save(){saveAppData(appData)}
+    function save(){saveAppData(appData);if(CloudService._currentUser)debouncedCloudSync();}
 
     // ====== 位置缓存 ======
     function restoreUserLocation(){
@@ -1103,6 +1444,305 @@
     }
     function closeAttachmentViewModal(){document.getElementById('attachmentViewModal').classList.add('hidden');}
 
+    // ====== 登录/注册功能 ======
+    let _authMode = 'login'; // 'login' or 'register'
+
+    function showAuthModal() {
+        _authMode = 'login';
+        document.getElementById('authEmail').value = '';
+        document.getElementById('authPassword').value = '';
+        document.getElementById('authError').classList.add('hidden');
+        document.getElementById('authSubmitBtn').textContent = '登录';
+        document.getElementById('authToggleBtn').textContent = '没有账号？去注册';
+        document.getElementById('authModal').classList.remove('hidden');
+    }
+
+    function closeAuthModal() {
+        document.getElementById('authModal').classList.add('hidden');
+    }
+
+    function toggleAuthMode() {
+        if (_authMode === 'login') {
+            _authMode = 'register';
+            document.getElementById('authSubmitBtn').textContent = '注册';
+            document.getElementById('authToggleBtn').textContent = '已有账号？去登录';
+        } else {
+            _authMode = 'login';
+            document.getElementById('authSubmitBtn').textContent = '登录';
+            document.getElementById('authToggleBtn').textContent = '没有账号？去注册';
+        }
+        document.getElementById('authError').classList.add('hidden');
+    }
+
+    async function handleAuthSubmit() {
+        const agreeBox = document.getElementById('authAgree');
+        if(agreeBox && !agreeBox.checked){
+            const errEl = document.getElementById('authError');
+            errEl.textContent = '请先阅读并同意用户协议和隐私政策';
+            errEl.classList.remove('hidden');
+            return;
+        }
+        const email = document.getElementById('authEmail').value.trim();
+        const password = document.getElementById('authPassword').value;
+        const errEl = document.getElementById('authError');
+
+        if (!email || !password) {
+            errEl.textContent = '请填写邮箱和密码';
+            errEl.classList.remove('hidden');
+            return;
+        }
+        if (password.length < 6) {
+            errEl.textContent = '密码至少6位';
+            errEl.classList.remove('hidden');
+            return;
+        }
+
+        const btn = document.getElementById('authSubmitBtn');
+        btn.textContent = '处理中...';
+        btn.disabled = true;
+
+        let result;
+        if (_authMode === 'register') {
+            result = await CloudService.signUp(email, password);
+        } else {
+            result = await CloudService.signIn(email, password);
+        }
+
+        btn.disabled = false;
+
+        if (result.ok) {
+            closeAuthModal();
+            if (_authMode === 'register') {
+                showToast('注册成功！请验证邮箱后登录');
+                _authMode = 'login';
+            } else {
+                showToast('登录成功！正在同步数据...');
+                // 登录成功后加载云端数据
+                await loadCloudDataOnLogin();
+                showCPage('profile');
+            }
+        } else {
+            btn.textContent = _authMode === 'login' ? '登录' : '注册';
+            errEl.textContent = result.msg || '操作失败';
+            errEl.classList.remove('hidden');
+        }
+    }
+
+    async function loadCloudDataOnLogin() {
+        const cloudData = await CloudService.loadFromCloud();
+        if (!cloudData) {
+            showToast('云端暂无数据，当前数据将自动上传');
+            // 首次登录，上传本地数据到云端
+            await CloudService.syncToCloud(appData);
+            return;
+        }
+
+        // 合并策略：云端优先，但保留本地新增的数据
+        const localPetIds = (appData.pets || []).map(p => p.id);
+        const cloudPetIds = (cloudData.pets || []).map(p => p.id);
+
+        // 合并宠物
+        const mergedPets = [...(cloudData.pets || [])];
+        for (const lp of (appData.pets || [])) {
+            if (!cloudPetIds.includes(lp.id)) {
+                mergedPets.push(lp); // 本地新增的宠物
+            }
+        }
+
+        // 合并疫苗记录
+        const mergedVacs = [...(cloudData.vaccinations || [])];
+        const cloudVacKeys = (cloudData.vaccinations || []).map(v => v.petId + '|' + v.name + '|' + v.date);
+        for (const lv of (appData.vaccinations || [])) {
+            const key = lv.petId + '|' + lv.name + '|' + lv.date;
+            if (!cloudVacKeys.includes(key)) {
+                mergedVacs.push(lv);
+            }
+        }
+
+        // 合并就诊记录
+        const mergedRecords = [...(cloudData.medicalRecords || [])];
+        const cloudRecKeys = (cloudData.medicalRecords || []).map(r => r.petId + '|' + r.service + '|' + r.date);
+        for (const lr of (appData.medicalRecords || [])) {
+            const key = lr.petId + '|' + lr.service + '|' + lr.date;
+            if (!cloudRecKeys.includes(key)) {
+                mergedRecords.push(lr);
+            }
+        }
+
+        // 更新 appData
+        appData.pets = mergedPets;
+        appData.vaccinations = mergedVacs;
+        appData.medicalRecords = mergedRecords;
+
+        // 用户信息：云端优先
+        if (cloudData.user) {
+            if (cloudData.user.name) appData.user.name = cloudData.user.name;
+            if (cloudData.user.phone) appData.user.phone = cloudData.user.phone;
+            appData.user.email = cloudData.user.email || '';
+        }
+
+        // 收藏合并
+        if (cloudData.favorites && cloudData.favorites.length > 0) {
+            const existingFavIds = (appData.favorites || []).map(f => typeof f === 'string' ? f : f.id);
+            for (const cf of cloudData.favorites) {
+                if (!existingFavIds.includes(cf.id)) {
+                    appData.favorites.push(cf);
+                }
+            }
+        }
+
+        save();
+
+        const petCount = mergedPets.length;
+        const vacCount = mergedVacs.length;
+        const recCount = mergedRecords.length;
+        showToast('云端数据已同步：' + petCount + '只宠物，' + vacCount + '条疫苗，' + recCount + '条就诊');
+    }
+
+    async function handleCloudLogout() {
+        if (!confirm('退出登录？本地数据不会丢失。')) return;
+        await CloudService.signOut();
+        showToast('已退出登录');
+        showCPage('profile');
+    }
+    // ====== 反馈弹窗 ======
+    function showFeedbackModal(){
+        const modal = document.createElement('div');
+        modal.id = 'feedbackModal';
+        modal.className = 'fixed inset-0 z-[2000] flex items-end justify-center';
+        modal.style.cssText = 'background:rgba(0,0,0,.4)';
+        modal.onclick = function(e){ if(e.target===modal) modal.remove(); };
+        modal.innerHTML = `
+        <div class="bg-white w-full max-w-[430px] rounded-t-3xl p-6 pb-10" style="animation:slideUp .3s ease-out">
+            <div class="flex justify-between items-center mb-5">
+                <h3 class="text-[18px] font-extrabold">💬 意见反馈</h3>
+                <button onclick="this.closest('.fixed').remove()" class="text-slate-400"><i class="fas fa-xmark text-lg"></i></button>
+            </div>
+            <p class="text-[13px] text-slate-500 mb-4">你的建议对我们非常重要，有任何问题或建议请告诉我们。</p>
+            <textarea id="feedbackText" class="input-field w-full h-28 text-[13px] resize-none" placeholder="请描述你的问题或建议..."></textarea>
+            <div class="mt-3">
+                <input id="feedbackContact" type="text" class="input-field w-full text-[13px]" placeholder="联系方式（邮箱/手机号，选填）">
+            </div>
+            <div class="mt-4 flex gap-3">
+                <button onclick="submitFeedback()" class="btn-primary flex-1 py-3 text-[14px]">提交反馈</button>
+                <button onclick="window.location.href='mailto:doctor.yiyi.app@gmail.com?subject=Doctor亿万用户反馈'" class="flex-1 py-3 text-[14px] font-bold rounded-xl border-2" style="color:#6C3CE7;border-color:#6C3CE7">📧 发邮件</button>
+            </div>
+            <p class="text-[11px] text-slate-400 mt-3 text-center">也可以直接发送邮件至 doctor.yiyi.app@gmail.com</p>
+        </div>`;
+        document.body.appendChild(modal);
+    }
+
+    function submitFeedback(){
+        const text = document.getElementById('feedbackText').value.trim();
+        const contact = document.getElementById('feedbackContact').value.trim();
+        if(!text){ showToast('请填写反馈内容'); return; }
+        const feedbacks = JSON.parse(localStorage.getItem('doctor_yiyi_feedbacks')||'[]');
+        feedbacks.push({ text, contact, time: new Date().toISOString(), version: '3.4' });
+        localStorage.setItem('doctor_yiyi_feedbacks', JSON.stringify(feedbacks));
+        document.getElementById('feedbackModal').remove();
+        showToast('感谢反馈！我们会认真阅读每一条建议 🙏');
+    }
+
+    // ====== 法律/协议页面 ======
+    function showLegalPage(type){
+        const pages = {
+            privacy: {
+                title: '隐私政策',
+                content: '<div class="text-[13px] text-slate-600 leading-relaxed space-y-4">'
+                    + '<p class="text-[11px] text-slate-400">更新日期：2026年6月20日 | 生效日期：2026年6月20日</p>'
+                    + '<p><b>Doctor亿万</b>（以下简称"我们"）非常重视您的隐私保护。本隐私政策说明我们如何收集、使用、存储和保护您的个人信息。</p>'
+                    + '<p><b>一、我们收集的信息</b></p>'
+                    + '<p>1. <b>账号信息</b>：注册时提供的邮箱地址和密码（加密存储于Supabase云端）。</p>'
+                    + '<p>2. <b>宠物信息</b>：您添加的宠物名称、品种、年龄、体重、照片等（由您主动填写）。</p>'
+                    + '<p>3. <b>健康记录</b>：您录入的疫苗记录、就诊记录、检查报告附件等。</p>'
+                    + '<p>4. <b>位置信息</b>：用于搜索附近医院（仅在您授权时获取，不持久化存储精确位置）。</p>'
+                    + '<p>5. <b>使用数据</b>：浏览记录、收藏的医院等（存储于您的设备本地和云端账号）。</p>'
+                    + '<p><b>二、我们如何使用信息</b></p>'
+                    + '<p>• 提供宠物健康管理功能（疫苗提醒、就诊记录等）<br>• 基于位置搜索附近宠物医院和善终服务机构<br>• 云端同步您的数据（需登录）<br>• 改善产品功能和用户体验</p>'
+                    + '<p><b>三、我们不会做的事</b></p>'
+                    + '<p>❌ 不会将您的个人数据出售给任何第三方<br>❌ 不会未经您同意共享您的宠物健康数据<br>❌ 不会向您发送无关的营销信息</p>'
+                    + '<p><b>四、数据存储与安全</b></p>'
+                    + '<p>• 未登录用户的数据仅存储在您的设备本地（localStorage）<br>• 登录用户的数据同步至Supabase云端数据库（加密传输）<br>• 附件（照片、报告）存储于Supabase Storage<br>• 您可以随时在"我的"页面退出登录并删除账号</p>'
+                    + '<p><b>五、您的权利</b></p>'
+                    + '<p>• 查看、修改、删除您的个人信息<br>• 导出或删除您的宠物数据<br>• 退出登录并停止云端同步<br>• 联系我们要求删除所有数据</p>'
+                    + '<p><b>六、联系方式</b></p>'
+                    + '<p>如对本隐私政策有疑问，请通过 App 内"意见反馈"功能或发送邮件至 doctor.yiyi.app@gmail.com 联系我们。</p>'
+                    + '</div>'
+            },
+            agreement: {
+                title: '用户服务协议',
+                content: '<div class="text-[13px] text-slate-600 leading-relaxed space-y-4">'
+                    + '<p class="text-[11px] text-slate-400">更新日期：2026年6月20日 | 生效日期：2026年6月20日</p>'
+                    + '<p>欢迎使用<b>Doctor亿万</b>宠物医疗信息服务平台（以下简称"本平台"）。使用本平台服务即表示您同意以下条款。</p>'
+                    + '<p><b>一、服务内容</b></p>'
+                    + '<p>本平台提供宠物医院信息查询、宠物健康管理（疫苗/就诊记录）、善终服务机构信息展示等服务。本平台为信息聚合展示工具，<b>不提供医疗诊断或治疗建议</b>。</p>'
+                    + '<p><b>二、用户责任</b></p>'
+                    + '<p>1. 您应提供真实、准确的宠物信息和联系方式。<br>2. 您应对自己的账号安全负责，不得将账号转让给他人。<br>3. 您不得利用本平台发布虚假信息、恶意评价或从事违法活动。</p>'
+                    + '<p><b>三、免责声明</b></p>'
+                    + '<p>1. 本平台展示的医院信息来源于公开数据（高德地图POI）和用户提交，我们不对信息的完整性、准确性做担保。<br>2. <b>本平台不构成任何医疗建议。</b>宠物就医请根据自身情况选择正规医疗机构，因就医产生的任何纠纷与本平台无关。<br>3. 善终服务（殡葬/火化等）信息仅供用户参考，请自行核实服务机构资质。<br>4. 因不可抗力、系统维护或第三方服务中断导致的损失，本平台不承担责任。</p>'
+                    + '<p><b>四、知识产权</b></p>'
+                    + '<p>本平台的所有内容（包括但不限于代码、界面设计、数据结构、算法）均受知识产权法保护，未经授权不得复制、修改或用于商业目的。</p>'
+                    + '<p><b>五、协议修改</b></p>'
+                    + '<p>我们保留随时修改本协议的权利，修改后的协议将在App内公布。继续使用本平台即视为同意修改后的协议。</p>'
+                    + '<p><b>六、联系方式</b></p>'
+                    + '<p>如有问题，请通过 App 内"意见反馈"功能联系我们。</p>'
+                    + '</div>'
+            },
+            disclaimer: {
+                title: '医疗免责声明',
+                content: '<div class="text-[13px] text-slate-600 leading-relaxed space-y-4">'
+                    + '<p class="text-[11px] text-slate-400">更新日期：2026年6月20日</p>'
+                    + '<p><b>重要提示：请仔细阅读</b></p>'
+                    + '<p>Doctor亿万是一个宠物医疗<b>信息聚合与展示平台</b>，而非医疗机构。请注意以下事项：</p>'
+                    + '<p><b>1. 非医疗建议</b></p>'
+                    + '<p>本平台提供的所有内容仅供参考，<b>不构成任何兽医诊断、治疗或用药建议</b>。宠物生病请及时前往正规医疗机构就诊。</p>'
+                    + '<p><b>2. 医院信息仅供参考</b></p>'
+                    + '<p>平台展示的医院信息来源于高德地图公开数据（POI）和用户提交。我们不对以下方面做担保：</p>'
+                    + '<p>• 医院资质、诊疗范围、设备条件<br>• 医生的执业资格和专业水平<br>• 服务价格和收费合理性<br>• 治疗结果的确定性</p>'
+                    + '<p><b>3. 善终服务信息</b></p>'
+                    + '<p>平台展示的宠物殡葬、火化等善终服务机构信息来源于公开数据和用户上传。请用户自行核实机构的合法资质，平台不对服务质量做担保。</p>'
+                    + '<p><b>4. 用户评价</b></p>'
+                    + '<p>用户发布的评价和反馈代表其个人观点，不代表本平台立场。评价可能存在主观偏差，请综合判断。</p>'
+                    + '<p><b>5. 紧急情况</b></p>'
+                    + '<p>如果您的宠物出现紧急状况（大量出血、呼吸困难、中毒、昏迷等），请<b>立即前往最近的宠物医院急诊</b>，不要依赖本平台搜索功能耽误救治时间。</p>'
+                    + '<p><b>6. 责任限制</b></p>'
+                    + '<p>因使用本平台信息而做出的就医决定及其后果，由用户自行承担。本平台不对因参考平台信息导致的任何直接或间接损失承担责任。</p>'
+                    + '</div>'
+            },
+            about: {
+                title: '关于Doctor亿万',
+                content: '<div class="text-[13px] text-slate-600 leading-relaxed space-y-4">'
+                    + '<div class="text-center py-4"><div class="text-5xl mb-3">🐾</div>'
+                    + '<h2 class="text-[20px] font-extrabold" style="background:linear-gradient(135deg,#6C3CE7,#FF6B9D);-webkit-background-clip:text;-webkit-text-fill-color:transparent">Doctor亿万</h2>'
+                    + '<p class="text-[12px] text-slate-400 mt-1">版本 3.4 | PWA</p></div>'
+                    + '<p><b>我们的使命</b></p>'
+                    + '<p>让每一位宠物主人都能找到合适的宠物医疗资源，让每一只毛孩子都能获得最好的照护。</p>'
+                    + '<p><b>我们做什么</b></p>'
+                    + '<p>• 📍 <b>附近医院</b>：基于定位搜索周边宠物医院，9大专科精准匹配<br>• 📋 <b>健康护照</b>：疫苗记录、就诊记录、检查报告，一个App全搞定<br>• 🕊️ <b>善终服务</b>：国内首个聚合宠物殡葬、火化、纪念信息的平台<br>• ⭐ <b>医院认领</b>：独立医院可认领主页，展示专科优势<br>• ☁️ <b>云端同步</b>：注册后数据自动上云，换手机不丢失</p>'
+                    + '<p><b>联系我们</b></p>'
+                    + '<p>• 反馈建议：App内"意见反馈"功能<br>• 邮箱：doctor.yiyi.app@gmail.com<br>• 医院认领合作：请通过"意见反馈"提交认领申请</p>'
+                    + '<p class="text-center text-[11px] text-slate-400 mt-6 pt-4" style="border-top:1px solid #f1f5f9">感谢每一位选择Doctor亿万的宠物主人 🐾<br>© 2026 Doctor亿万 版权所有</p>'
+                    + '</div>'
+            }
+        };
+        const page = pages[type];
+        if(!page) return;
+        const modal = document.createElement('div');
+        modal.className = 'fixed inset-0 z-[2000] flex items-end justify-center';
+        modal.style.cssText = 'background:rgba(0,0,0,.4)';
+        modal.onclick = function(e){ if(e.target===modal) modal.remove(); };
+        modal.innerHTML = '<div class="bg-white w-full max-w-[430px] rounded-t-3xl overflow-hidden" style="animation:slideUp .3s ease-out;max-height:85vh;display:flex;flex-direction:column">'
+            + '<div class="flex justify-between items-center p-5 border-b border-slate-100 flex-shrink-0">'
+            + '<h3 class="text-[17px] font-extrabold">' + page.title + '</h3>'
+            + '<button onclick="this.closest(\'.fixed\').remove()" class="text-slate-400"><i class="fas fa-xmark text-lg"></i></button></div>'
+            + '<div class="p-5 overflow-y-auto flex-1" style="-webkit-overflow-scrolling:touch">' + page.content + '</div>'
+            + '<div class="p-4 border-t border-slate-100 flex-shrink-0">'
+            + '<button onclick="this.closest(\'.fixed\').remove()" class="btn-primary w-full py-3 text-[14px]">我已了解</button></div></div>';
+        document.body.appendChild(modal);
+    }
+
+
+
     // ====== C端 - 善终 ======
     function renderCAftercare(){
         return`
@@ -1136,6 +1776,8 @@
     // ====== C端 - 我的 ======
     function renderCProfile(){
         const u=appData.user;
+        const isLoggedIn=!!CloudService._currentUser;
+        const userEmail=CloudService._currentUser?.email||'';
         const alipayBound=u.alipayBound;
         const wechatBound=u.wechatBound;
         const alipayInsurance=u.alipayInsurance||null;
@@ -1155,6 +1797,7 @@
                     </div>
                     <button onclick="editProfile()" class="px-5 py-2.5 bg-white/20 backdrop-blur-sm rounded-2xl text-[14px] font-bold">编辑</button>
                 </div>
+                ${isLoggedIn ? `<div class="mt-3 flex items-center gap-2"><span class="px-2 py-0.5 rounded-full text-[10px] font-bold" style="background:rgba(255,255,255,.2)">☁️ 云端同步中</span><span class="text-[11px] opacity-70">${userEmail}</span></div>` : `<div class="mt-3"><button onclick="showAuthModal()" class="px-4 py-1.5 bg-white/20 rounded-full text-[11px] font-bold">🔒 登录/注册，开启云端同步</button></div>`}
             </div>
             <!-- 支付绑定 -->
             <div class="card p-6 mb-5" style="border-radius:24px">
@@ -1233,11 +1876,33 @@
                 </button>`).join('')}
             </div>
             <div class="card overflow-hidden">
-                ${[['fa-headset','在线客服'],['fa-circle-question','帮助与反馈'],['fa-circle-info','关于我们']].map(([icon,title])=>`
-                <button onclick="showToast('功能开发中')" class="w-full flex items-center justify-between p-5 border-b border-slate-50 last:border-0 active:bg-primary-50 transition-colors">
+                ${[
+['fa-circle-question','帮助与反馈',()=>showFeedbackModal()],
+['fa-shield-halved','用户协议与隐私',()=>showLegalPage('privacy')],
+['fa-circle-info','关于Doctor亿万',()=>showLegalPage('about')]
+].map(([icon,title,action])=>`
+                <button onclick="(${action.toString()})()" class="w-full flex items-center justify-between p-5 border-b border-slate-50 last:border-0 active:bg-primary-50 transition-colors">
                     <div class="flex items-center gap-3"><i class="fas ${icon} text-slate-400 w-5 text-center text-lg"></i><span class="text-[15px] font-bold">${title}</span></div>
                     <i class="fas fa-chevron-right text-slate-300 text-[12px]"></i>
                 </button>`).join('')}
+            </div>
+            <!-- 医疗免责声明 -->
+            <div class="card mt-4 p-4" style="background:#FFF7ED;border:1px solid #FED7AA">
+                <p class="text-[10px] text-orange-700 leading-relaxed"><i class="fas fa-triangle-exclamation mr-1"></i><b>免责声明</b>：Doctor亿万仅提供信息聚合与展示服务，不构成任何医疗建议。平台展示的医院信息来源于公开数据和用户上传，平台不对医疗质量做任何担保。宠物就医请根据实际情况自行判断。<a href="javascript:showLegalPage('disclaimer')" style="color:#C2410C;font-weight:600;text-decoration:underline">查看详情</a></p>
+            </div>
+            <div class="card overflow-hidden" style="display:none"><!-- placeholder -->
+            </div>
+            <!-- 账户操作 -->
+            <div class="card overflow-hidden mt-5">
+                ${isLoggedIn ? `
+                <button onclick="handleCloudLogout()" class="w-full flex items-center justify-center p-5 text-[15px] font-bold" style="color:#EF4444">
+                    <i class="fas fa-right-from-bracket mr-2"></i>退出登录
+                </button>
+                ` : `
+                <button onclick="showAuthModal()" class="w-full flex items-center justify-center gap-2 p-5 text-[15px] font-bold" style="background:linear-gradient(135deg,#6C3CE7,#FF6B9D);color:#fff">
+                    <i class="fas fa-cloud-arrow-up"></i>登录/注册 · 开启云端同步
+                </button>
+                `}
             </div>
         </div>`;
     }
@@ -1300,6 +1965,9 @@
         const oldPhone=appData.user.phone;
         appData.user.name=name;appData.user.phone=phone||'';
         save();showCPage('profile');showToast('已更新');
+        if(CloudService._currentUser){
+            supabase.from('profiles').update({nickname:name,phone:phone||''}).eq('id',CloudService._currentUser.id);
+        }
         // 手机号变更时触发重新定位
         if(phone&&phone!==oldPhone&&phone.length>=11){
             showToast('手机号已更新，重新定位中...');
@@ -2745,6 +3413,34 @@ function renderBProfile(){
     document.addEventListener('DOMContentLoaded',()=>{
         initSupabase();
         switchMode('c');
+        // 检查云端登录状态
+        if(supabase){
+            CloudService.checkAuth().then(user=>{
+                if(user){
+                    console.log('[Cloud] 已登录:', user.email);
+                    // 静默加载云端数据
+                    CloudService.loadFromCloud().then(cloudData=>{
+                        if(cloudData && cloudData.pets && cloudData.pets.length > 0){
+                            // 云端有数据，合并到本地
+                            const localPetIds = (appData.pets||[]).map(p=>p.id);
+                            for(const cp of cloudData.pets){
+                                if(!localPetIds.includes(cp.id)) appData.pets.push(cp);
+                            }
+                            const cloudVacKeys = (appData.vaccinations||[]).map(v=>v.petId+'|'+v.name+'|'+v.date);
+                            for(const cv of (cloudData.vaccinations||[])){
+                                if(!cloudVacKeys.includes(cv.petId+'|'+cv.name+'|'+cv.date)) appData.vaccinations.push(cv);
+                            }
+                            const cloudRecKeys = (appData.medicalRecords||[]).map(r=>r.petId+'|'+r.service+'|'+r.date);
+                            for(const cr of (cloudData.medicalRecords||[])){
+                                if(!cloudRecKeys.includes(cr.petId+'|'+cr.service+'|'+cr.date)) appData.medicalRecords.push(cr);
+                            }
+                            save();
+                            console.log('[Cloud] 数据已合并');
+                        }
+                    });
+                }
+            });
+        }
         // 1. 先用缓存位置更新首页UI
         if(restoreUserLocation()){
             _locationReady=true;
@@ -2756,6 +3452,33 @@ function renderBProfile(){
         initAMap();
     });
     </script>
+
+    <!-- 登录/注册弹窗 -->
+    <div id="authModal" class="hidden fixed inset-0 z-[2000] flex items-end justify-center" style="background:rgba(0,0,0,.4)" onclick="if(event.target===this)closeAuthModal()">
+        <div class="bg-white w-full max-w-[430px] rounded-t-3xl p-6 pb-10" style="animation:slideUp .3s ease-out">
+            <div class="flex justify-between items-center mb-6">
+                <h3 class="text-[18px] font-extrabold">☁️ 云端账号</h3>
+                <button onclick="closeAuthModal()" class="text-slate-400"><i class="fas fa-xmark text-lg"></i></button>
+            </div>
+            <p class="text-[13px] text-slate-500 mb-5">登录后，宠物档案、疫苗记录、就诊记录自动同步到云端，换手机也不丢失。</p>
+            <div class="space-y-3">
+                <input id="authEmail" type="email" class="input-field" placeholder="邮箱地址" autocomplete="email">
+                <input id="authPassword" type="password" class="input-field" placeholder="密码（至少6位）" autocomplete="current-password">
+                <div id="authError" class="text-[12px] text-red-500 hidden"></div>
+                <label class="flex items-start gap-2 cursor-pointer select-none">
+                    <input type="checkbox" id="authAgree" class="mt-0.5 w-4 h-4 rounded accent-[#6C3CE7] flex-shrink-0">
+                    <span class="text-[11px] text-slate-500 leading-relaxed">我已阅读并同意<a href="javascript:showLegalPage('agreement')" style="color:#6C3CE7;font-weight:600">《用户服务协议》</a>和<a href="javascript:showLegalPage('privacy')" style="color:#6C3CE7;font-weight:600">《隐私政策》</a></span>
+                </label>
+                <button id="authSubmitBtn" onclick="handleAuthSubmit()" class="btn-primary w-full py-3 text-[14px]">登录</button>
+                <div class="text-center">
+                    <button onclick="toggleAuthMode()" id="authToggleBtn" class="text-[13px] font-bold" style="color:#6C3CE7">没有账号？去注册</button>
+                </div>
+            </div>
+            <div class="mt-5 p-4 rounded-2xl" style="background:#F8F7FF">
+                <p class="text-[11px] text-slate-500 leading-relaxed">🔒 数据加密存储于 Supabase 云端<br>📱 多设备同步，换手机不丢数据<br>🐾 支持多宠物档案管理</p>
+            </div>
+        </div>
+    </div>
 
     <!-- PWA: Service Worker 注册 + 安装提示 -->
     <div id="pwa-install-banner" style="display:none;position:fixed;bottom:0;left:0;right:0;z-index:9999;padding:12px 16px;background:linear-gradient(135deg,rgba(108,60,231,.97),rgba(139,92,246,.97));backdrop-filter:blur(20px);box-shadow:0 -4px 24px rgba(108,60,231,.25);animation:fadeUp .4s cubic-bezier(.22,1,.36,1) both">
@@ -2779,10 +3502,31 @@ function renderBProfile(){
                 navigator.serviceWorker.register('./sw.js', { scope: './' })
                     .then(function(reg) {
                         console.log('[PWA] SW注册成功, scope:', reg.scope);
+                        // 检查更新
+                        reg.update();
+                        // 检测新版本
+                        reg.onupdatefound = function() {
+                            var installing = reg.installing;
+                            installing.onstatechange = function() {
+                                if (installing.state === 'installed' && navigator.serviceWorker.controller) {
+                                    if(confirm('🐾 Doctor亿万有新版本啦！\n点击确定立即更新，体验最新功能。')){
+                                        reg.waiting.postMessage('SKIP_WAITING');
+                                        setTimeout(function(){ location.reload(); }, 300);
+                                    }
+                                }
+                            };
+                        };
                     })
                     .catch(function(err) {
                         console.log('[PWA] SW注册失败:', err);
                     });
+                // 监听新SW接管完成
+                var refreshing = false;
+                navigator.serviceWorker.addEventListener('controllerchange', function() {
+                    if (refreshing) return;
+                    refreshing = true;
+                    location.reload();
+                });
             });
         }
 
