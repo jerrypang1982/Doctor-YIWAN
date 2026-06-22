@@ -1,7 +1,7 @@
-const CACHE_VERSION = 'v1.1.0';
+const CACHE_VERSION = 'v1.2.0';
 const CACHE_NAME = `doctor-yiyi-${CACHE_VERSION}`;
 
-// 需要缓存的关键资源
+// éœ€è¦ç¼“å­˜çš„å…³é”®èµ„æº
 const STATIC_ASSETS = [
     './',
     './index.html',
@@ -12,35 +12,35 @@ const STATIC_ASSETS = [
     'https://webapi.amap.com/loader.js',
 ];
 
-// 安装事件：预缓存关键资源
+// å®‰è£…äº‹ä»¶ï¼šé¢„ç¼“å­˜å…³é”®èµ„æº
 self.addEventListener('install', (event) => {
-    console.log('[SW] 安装中... 版本:', CACHE_VERSION);
+    console.log('[SW] å®‰è£…ä¸­... ç‰ˆæœ¬:', CACHE_VERSION);
     event.waitUntil(
         caches.open(CACHE_NAME)
             .then((cache) => {
-                console.log('[SW] 预缓存资源');
+                console.log('[SW] é¢„ç¼“å­˜èµ„æº');
                 return cache.addAll(STATIC_ASSETS);
             })
             .then(() => {
-                console.log('[SW] 预缓存完成');
+                console.log('[SW] é¢„ç¼“å­˜å®Œæˆ');
                 return self.skipWaiting();
             })
             .catch((err) => {
-                console.log('[SW] 预缓存失败:', err);
+                console.log('[SW] é¢„ç¼“å­˜å¤±è´¥:', err);
             })
     );
 });
 
-// 监听来自页面的消息（强制跳过等待）
+// ç›‘å¬æ¥è‡ªé¡µé¢çš„æ¶ˆæ¯ï¼ˆå¼ºåˆ¶è·³è¿‡ç­‰å¾…ï¼‰
 self.addEventListener('message', (event) => {
     if (event.data === 'SKIP_WAITING') {
         self.skipWaiting();
     }
 });
 
-// 激活事件：清理旧缓存
+// æ¿€æ´»äº‹ä»¶ï¼šæ¸…ç†æ—§ç¼“å­˜
 self.addEventListener('activate', (event) => {
-    console.log('[SW] 激活中...');
+    console.log('[SW] æ¿€æ´»ä¸­...');
     event.waitUntil(
         caches.keys()
             .then((cacheNames) => {
@@ -48,24 +48,24 @@ self.addEventListener('activate', (event) => {
                     cacheNames
                         .filter((name) => name.startsWith('doctor-yiyi-') && name !== CACHE_NAME)
                         .map((name) => {
-                            console.log('[SW] 删除旧缓存:', name);
+                            console.log('[SW] åˆ é™¤æ—§ç¼“å­˜:', name);
                             return caches.delete(name);
                         })
                 );
             })
             .then(() => {
-                console.log('[SW] 激活完成');
+                console.log('[SW] æ¿€æ´»å®Œæˆ');
                 return self.clients.claim();
             })
     );
 });
 
-// 拦截请求：Cache First 策略
+// æ‹¦æˆªè¯·æ±‚ï¼šCache First ç­–ç•¥
 self.addEventListener('fetch', (event) => {
     const { request } = event;
     const url = new URL(request.url);
 
-    // 只处理同源的请求和已知CDN资源
+    // åªå¤„ç†åŒæºçš„è¯·æ±‚å’Œå·²çŸ¥CDNèµ„æº
     const isSameOrigin = url.origin === self.location.origin;
     const isCdnAsset = [
         'cdn.tailwindcss.com',
@@ -75,16 +75,16 @@ self.addEventListener('fetch', (event) => {
     ].some((domain) => url.hostname.includes(domain));
 
     if (!isSameOrigin && !isCdnAsset) {
-        return; // 不处理第三方API请求，让其直接走网络
+        return; // ä¸å¤„ç†ç¬¬ä¸‰æ–¹APIè¯·æ±‚ï¼Œè®©å…¶ç›´æŽ¥èµ°ç½‘ç»œ
     }
 
     event.respondWith(
         caches.match(request)
             .then((cachedResponse) => {
                 if (cachedResponse) {
-                    // 缓存命中，后台更新缓存（stale-while-revalidate for HTML）
+                    // ç¼“å­˜å‘½ä¸­ï¼ŒåŽå°æ›´æ–°ç¼“å­˜ï¼ˆstale-while-revalidate for HTMLï¼‰
                     if (isSameOrigin && request.destination === 'document') {
-                        // HTML页面：先返回缓存，后台网络更新
+                        // HTMLé¡µé¢ï¼šå…ˆè¿”å›žç¼“å­˜ï¼ŒåŽå°ç½‘ç»œæ›´æ–°
                         const fetchPromise = fetch(request)
                             .then((networkResponse) => {
                                 if (networkResponse && networkResponse.status === 200) {
@@ -100,10 +100,10 @@ self.addEventListener('fetch', (event) => {
                     return cachedResponse;
                 }
 
-                // 缓存未命中：网络请求
+                // ç¼“å­˜æœªå‘½ä¸­ï¼šç½‘ç»œè¯·æ±‚
                 return fetch(request)
                     .then((networkResponse) => {
-                        // 只缓存成功的GET请求
+                        // åªç¼“å­˜æˆåŠŸçš„GETè¯·æ±‚
                         if (networkResponse && networkResponse.status === 200 && request.method === 'GET') {
                             const responseClone = networkResponse.clone();
                             caches.open(CACHE_NAME).then((cache) => {
@@ -113,11 +113,11 @@ self.addEventListener('fetch', (event) => {
                         return networkResponse;
                     })
                     .catch(() => {
-                        // 网络失败 + 无缓存：返回离线回退页
+                        // ç½‘ç»œå¤±è´¥ + æ— ç¼“å­˜ï¼šè¿”å›žç¦»çº¿å›žé€€é¡µ
                         if (request.destination === 'document') {
                             return createOfflineFallback();
                         }
-                        return new Response('离线中', {
+                        return new Response('ç¦»çº¿ä¸­', {
                             status: 503,
                             statusText: 'Service Unavailable'
                         });
@@ -126,14 +126,14 @@ self.addEventListener('fetch', (event) => {
     );
 });
 
-// 生成离线回退页面
+// ç”Ÿæˆç¦»çº¿å›žé€€é¡µé¢
 function createOfflineFallback() {
     const html = `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Doctor亿万 - 离线</title>
+    <title>Doctoräº¿ä¸‡ - ç¦»çº¿</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, sans-serif;
@@ -167,10 +167,10 @@ function createOfflineFallback() {
 </head>
 <body>
     <div class="container">
-        <div class="icon">🐾</div>
-        <h1>Doctor亿万</h1>
-        <p>当前无网络连接<br>请检查网络设置后重试</p>
-        <button onclick="location.reload()">重新加载</button>
+        <div class="icon">ðŸ¾</div>
+        <h1>Doctoräº¿ä¸‡</h1>
+        <p>å½“å‰æ— ç½‘ç»œè¿žæŽ¥<br>è¯·æ£€æŸ¥ç½‘ç»œè®¾ç½®åŽé‡è¯•</p>
+        <button onclick="location.reload()">é‡æ–°åŠ è½½</button>
     </div>
 </body>
 </html>`;
