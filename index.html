@@ -463,17 +463,17 @@
     const ClaimService={
         async getClaim(poiId){if(claimCache[poiId])return claimCache[poiId];if(!supabase)return null;try{const{data,error}=await supabase.from("hospitals_claim").select("*").eq("amap_poi_id",poiId).maybeSingle();if(error)return null;if(data)claimCache[poiId]=data;return data;}catch(e){return null;}},
         async getClaimsBatch(poiIds){if(!supabase||!poiIds.length)return{};const u=poiIds.filter(id=>!claimCache[id]);if(!u.length)return claimCache;try{const{data}=await supabase.from("hospitals_claim").select("amap_poi_id,claim_status,specialties,description").in("amap_poi_id",u);(data||[]).forEach(d=>{claimCache[d.amap_poi_id]=d;});return claimCache;}catch(e){return claimCache;}},
-        async submitClaim(poiId,cd){if(!supabase){showToast("后端未配置");return false;}try{const u=supabase.auth.getUser?(await supabase.auth.getUser()).data.user:null;const row={amap_poi_id:poiId,claim_user_id:u?.id||'local',claim_status:'pending',specialties:cd.specialties||[],description:cd.description||'',equipment:cd.equipment||'',price_range:cd.price_range||'',created_at:new Date().toISOString()};const{error}=await supabase.from("hospitals_claim").upsert(row,{onConflict:"amap_poi_id"});if(error){showToast("认领失败");return false;}claimCache[poiId]=row;showToast("认领申请已提交！");return true;}catch(e){showToast("网络异常");return false;}},
+        async submitClaim(poiId,cd){if(!supabase){showToast("后端未配置");return false;}try{const u=supabase.auth.getUser?(await supabase.auth.getUser()).data.user:null;const row={amap_poi_id:poiId,claim_user_id:(u && u.id)||'local',claim_status:'pending',specialties:cd.specialties||[],description:cd.description||'',equipment:cd.equipment||'',price_range:cd.price_range||'',created_at:new Date().toISOString()};const{error}=await supabase.from("hospitals_claim").upsert(row,{onConflict:"amap_poi_id"});if(error){showToast("认领失败");return false;}claimCache[poiId]=row;showToast("认领申请已提交！");return true;}catch(e){showToast("网络异常");return false;}},
         async updateClaimData(poiId,ud){if(!supabase)return false;try{const{error}=await supabase.from("hospitals_claim").update(ud).eq("amap_poi_id",poiId);if(error)return false;claimCache[poiId]={...claimCache[poiId],...ud};return true;}catch(e){return false;}},
         async getDoctors(poiId){if(!supabase)return[];try{const{data}=await supabase.from("doctors").select("*").eq("amap_poi_id",poiId);return data||[];}catch(e){return[];}},
         async upsertDoctor(poiId,doc){if(!supabase)return false;try{const row={...doc,amap_poi_id:poiId};if(!row.id)row.id='d'+Date.now();const{error}=await supabase.from("doctors").upsert(row,{onConflict:"id"});return !error;}catch(e){return false;}},
         async deleteDoctor(id){if(!supabase)return false;try{const{error}=await supabase.from("doctors").delete().eq("id",id);return !error;}catch(e){return false;}},
-        async submitAppointment(a){if(!supabase)return false;try{const{error}=await supabase.from("appointments").insert({amap_poi_id:a.hospitalId,user_phone:appData.user?.phone||'',pet_info:JSON.stringify(a.petId),doctor_id:a.doctorName||'',datetime:a.date+' '+a.time,service:a.service,status:a.status,local_id:a.id});return !error;}catch(e){return false;}},
+        async submitAppointment(a){if(!supabase)return false;try{const{error}=await supabase.from("appointments").insert({amap_poi_id:a.hospitalId,user_phone:(appData.user && appData.user.phone)||'',pet_info:JSON.stringify(a.petId),doctor_id:a.doctorName||'',datetime:a.date+' '+a.time,service:a.service,status:a.status,local_id:a.id});return !error;}catch(e){return false;}},
         async updateAppointmentStatus(lid,st){if(!supabase)return false;try{const{error}=await supabase.from("appointments").update({status:st}).eq("local_id",lid);return !error;}catch(e){return false;}},
         async signIn(e,p){if(!supabase)return{ok:false};try{const{error}=await supabase.auth.signInWithPassword({email:e,password:p});return error?{ok:false,msg:error.message}:{ok:true};}catch(e){return{ok:false};}},
         async signUp(e,p){if(!supabase)return{ok:false};try{const{error}=await supabase.auth.signUp({email:e,password:p});return error?{ok:false,msg:error.message}:{ok:true};}catch(e){return{ok:false};}},
         async signOut(){if(!supabase)return;await supabase.auth.signOut();claimCache={};},
-        async getCurrentUser(){if(!supabase)return null;try{const{data}=await supabase.auth.getUser();return data?.user||null;}catch(e){return null;}}
+        async getCurrentUser(){if(!supabase)return null;try{const{data}=await supabase.auth.getUser();return (data && data.user)||null;}catch(e){return null;}}
     };
 
 
@@ -687,8 +687,8 @@
 
                 // 同步用户信息
                 await supabase.from('profiles').update({
-                    nickname: data.user?.name || '',
-                    phone: data.user?.phone || '',
+                    nickname: (data.user && data.user.name) || '',
+                    phone: (data.user && data.user.phone) || '',
                     updated_at: new Date().toISOString()
                 }).eq('id', userId);
 
@@ -775,8 +775,8 @@
                     medicalRecords: records,
                     favorites,
                     user: {
-                        name: profile?.nickname || '',
-                        phone: profile?.phone || '',
+                        name: (profile && profile.nickname) || '',
+                        phone: (profile && profile.phone) || '',
                         email: this._currentUser.email || '',
                         alipayBound: false,
                         wechatBound: false
@@ -866,7 +866,7 @@
     function petAvatar(pet,sizeClass){
         var s=sizeClass||'w-14 h-14';
         if(pet&&pet.photo){return '<img src="'+pet.photo+'" class="'+s+' rounded-full object-cover shadow-md" style="flex-shrink:0">';}
-        return '<div class="'+s+' rounded-full flex items-center justify-center" style="flex-shrink:0;background:linear-gradient(135deg,#F3E8FF,#EDE9FE)"><span class="text-3xl">'+petIconSvg(pet?.species,pet?.gender)+'</span></div>';
+        return '<div class="'+s+' rounded-full flex items-center justify-center" style="flex-shrink:0;background:linear-gradient(135deg,#F3E8FF,#EDE9FE)"><span class="text-3xl">'+petIconSvg((pet && pet.species),(pet && pet.gender))+'</span></div>';
     }
     function handlePetPhotoUpload(input){
         if(!input.files||!input.files[0])return;
@@ -1043,8 +1043,8 @@
                         <div class="card-compact p-5 transition-all hover:scale-[1.01]">
                             <div class="flex items-center justify-between mb-4">
                                 <div class="flex items-center gap-3">
-                                    ${pet?.photo?'<img src="'+pet.photo+'" class="w-10 h-10 rounded-full object-cover shadow" style="flex-shrink:0;border:2px solid #6C3CE7">':'<span class="text-4xl">'+(pet?petIconSvg(pet.species,pet.gender):'🐾')+'</span>'}
-                                    <div><p class="text-[15px] font-bold">${pet?.name||'未知'}</p><p class="text-[13px] text-slate-400">${a.service}</p></div>
+                                    ${(pet && pet.photo)?'<img src="'+pet.photo+'" class="w-10 h-10 rounded-full object-cover shadow" style="flex-shrink:0;border:2px solid #6C3CE7">':'<span class="text-4xl">'+(pet?petIconSvg(pet.species,pet.gender):'🐾')+'</span>'}
+                                    <div><p class="text-[15px] font-bold">${(pet && pet.name)||'未知'}</p><p class="text-[13px] text-slate-400">${a.service}</p></div>
                                 </div>
                                 <span class="badge ${statusClass}">${statusText}</span>
                             </div>
@@ -1624,9 +1624,9 @@
             </div>
             <div class="mt-4 flex gap-3">
                 <button onclick="submitFeedback()" class="btn-primary flex-1 py-3 text-[14px]">提交反馈</button>
-                <button onclick="window.location.href='mailto:doctor.yiwan.app@gmail.com?subject=Doctor亿万用户反馈'" class="flex-1 py-3 text-[14px] font-bold rounded-xl border-2" style="color:#6C3CE7;border-color:#6C3CE7">📧 发邮件</button>
+                <button onclick="window.location.href='mailto:doctor_yiwan@163.com?subject=Doctor亿万用户反馈'" class="flex-1 py-3 text-[14px] font-bold rounded-xl border-2" style="color:#6C3CE7;border-color:#6C3CE7">📧 发邮件</button>
             </div>
-            <p class="text-[11px] text-slate-400 mt-3 text-center">也可以直接发送邮件至 doctor.yiwan.app@gmail.com</p>
+            <p class="text-[11px] text-slate-400 mt-3 text-center">也可以直接发送邮件至 doctor_yiwan@163.com</p>
         </div>`;
         document.body.appendChild(modal);
     }
@@ -1665,7 +1665,7 @@
                     + '<p><b>五、您的权利</b></p>'
                     + '<p>• 查看、修改、删除您的个人信息<br>• 导出或删除您的宠物数据<br>• 退出登录并停止云端同步<br>• 联系我们要求删除所有数据</p>'
                     + '<p><b>六、联系方式</b></p>'
-                    + '<p>如对本隐私政策有疑问，请通过 App 内"意见反馈"功能或发送邮件至 doctor.yiwan.app@gmail.com 联系我们。</p>'
+                    + '<p>如对本隐私政策有疑问，请通过 App 内"意见反馈"功能或发送邮件至 doctor_yiwan@163.com 联系我们。</p>'
                     + '</div>'
             },
             agreement: {
@@ -1719,7 +1719,7 @@
                     + '<p><b>我们做什么</b></p>'
                     + '<p>• 📍 <b>附近医院</b>：基于定位搜索周边宠物医院，9大专科精准匹配<br>• 📋 <b>健康护照</b>：疫苗记录、就诊记录、检查报告，一个App全搞定<br>• 🕊️ <b>善终服务</b>：国内首个聚合宠物殡葬、火化、纪念信息的平台<br>• ⭐ <b>医院认领</b>：独立医院可认领主页，展示专科优势<br>• ☁️ <b>云端同步</b>：注册后数据自动上云，换手机不丢失</p>'
                     + '<p><b>联系我们</b></p>'
-                    + '<p>• 反馈建议：App内"意见反馈"功能<br>• 邮箱：doctor.yiwan.app@gmail.com<br>• 医院认领合作：请通过"意见反馈"提交认领申请</p>'
+                    + '<p>• 反馈建议：App内"意见反馈"功能<br>• 邮箱：doctor_yiwan@163.com<br>• 医院认领合作：请通过"意见反馈"提交认领申请</p>'
                     + '<p class="text-center text-[11px] text-slate-400 mt-6 pt-4" style="border-top:1px solid #f1f5f9">感谢每一位选择Doctor亿万的宠物主人 🐾<br>© 2026 Doctor亿万 版权所有</p>'
                     + '</div>'
             }
@@ -1776,7 +1776,7 @@
     function renderCProfile(){
         const u=appData.user;
         const isLoggedIn=!!CloudService._currentUser;
-        const userEmail=CloudService._currentUser?.email||'';
+        const userEmail=(CloudService._currentUser && CloudService._currentUser.email)||'';
         const alipayBound=u.alipayBound;
         const wechatBound=u.wechatBound;
         const alipayInsurance=u.alipayInsurance||null;
@@ -2051,7 +2051,7 @@
                 <!-- 宠物头像 -->
                 <div class="flex flex-col items-center">
                     <div id="petPhotoPreview" class="mb-3">
-                        ${pet?.photo?'<img src="'+pet.photo+'" class="w-24 h-24 rounded-full object-cover shadow-lg" style="border:3px solid #6C3CE7">':'<div class="w-24 h-24 rounded-full flex items-center justify-center" style="background:#F3E8FF;border:2px dashed #C4B5FD"><i class="fas fa-camera text-2xl text-primary-300"></i></div>'}
+                        ${(pet && pet.photo)?'<img src="'+pet.photo+'" class="w-24 h-24 rounded-full object-cover shadow-lg" style="border:3px solid #6C3CE7">':'<div class="w-24 h-24 rounded-full flex items-center justify-center" style="background:#F3E8FF;border:2px dashed #C4B5FD"><i class="fas fa-camera text-2xl text-primary-300"></i></div>'}
                     </div>
                     <div class="flex gap-3">
                         <label class="flex items-center gap-1.5 px-4 py-2 rounded-xl text-[13px] font-bold cursor-pointer" style="background:linear-gradient(135deg,#6C3CE7,#7C3AED);color:#fff;touch-action:manipulation">
@@ -2062,34 +2062,34 @@
                             <i class="fas fa-image"></i>选择照片
                             <input type="file" accept="image/*" onchange="handlePetPhotoUpload(this)" class="hidden">
                         </label>
-                        ${pet?.photo?'<div onclick="removePetPhoto()" class="flex items-center gap-1 px-3 py-2 rounded-xl text-[13px] font-bold cursor-pointer" style="background:#FEE2E2;color:#EF4444;touch-action:manipulation"><i class="fas fa-trash-can"></i>删除</div>':''}
+                        ${(pet && pet.photo)?'<div onclick="removePetPhoto()" class="flex items-center gap-1 px-3 py-2 rounded-xl text-[13px] font-bold cursor-pointer" style="background:#FEE2E2;color:#EF4444;touch-action:manipulation"><i class="fas fa-trash-can"></i>删除</div>':''}
                     </div>
                 </div>
-                <div><label class="text-[13px] text-slate-500 mb-1.5 block">宠物名字</label><input id="petName" class="input-field" value="${pet?.name||''}" placeholder="如：豆豆"></div>
+                <div><label class="text-[13px] text-slate-500 mb-1.5 block">宠物名字</label><input id="petName" class="input-field" value="${(pet && pet.name)||''}" placeholder="如：豆豆"></div>
                 <div><label class="text-[13px] text-slate-500 mb-1.5 block">种类</label>
                     <div class="flex gap-2 flex-wrap">
                         <button onclick="selectSpecies('dog')" class="pill ${(!pet||pet.species==='dog')?'pill-active':'pill-default'}" data-sp="dog">🐕 狗狗</button>
-                        <button onclick="selectSpecies('cat')" class="pill ${pet?.species==='cat'?'pill-active':'pill-default'}" data-sp="cat">🐱 猫咪</button>
-                        <button onclick="selectSpecies('bird')" class="pill ${pet?.species==='bird'?'pill-active':'pill-default'}" data-sp="bird">🐦 鸟类</button>
-                        <button onclick="selectSpecies('reptile')" class="pill ${pet?.species==='reptile'?'pill-active':'pill-default'}" data-sp="reptile">🦎 爬虫</button>
+                        <button onclick="selectSpecies('cat')" class="pill ${(pet && pet.species)==='cat'?'pill-active':'pill-default'}" data-sp="cat">🐱 猫咪</button>
+                        <button onclick="selectSpecies('bird')" class="pill ${(pet && pet.species)==='bird'?'pill-active':'pill-default'}" data-sp="bird">🐦 鸟类</button>
+                        <button onclick="selectSpecies('reptile')" class="pill ${(pet && pet.species)==='reptile'?'pill-active':'pill-default'}" data-sp="reptile">🦎 爬虫</button>
                     </div>
                 </div>
-                <div><label class="text-[13px] text-slate-500 mb-1.5 block">品种</label><input id="petBreed" class="input-field" value="${pet?.breed||''}" placeholder="如：柯基"></div>
+                <div><label class="text-[13px] text-slate-500 mb-1.5 block">品种</label><input id="petBreed" class="input-field" value="${(pet && pet.breed)||''}" placeholder="如：柯基"></div>
                 <div class="grid grid-cols-3 gap-3">
-                    <div><label class="text-[13px] text-slate-500 mb-1.5 block">年龄</label><input id="petAge" type="number" class="input-field" value="${pet?.age||''}" placeholder="岁"></div>
-                    <div><label class="text-[13px] text-slate-500 mb-1.5 block">体重</label><input id="petWeight" type="number" step="0.1" class="input-field" value="${pet?.weight||''}" placeholder="kg"></div>
+                    <div><label class="text-[13px] text-slate-500 mb-1.5 block">年龄</label><input id="petAge" type="number" class="input-field" value="${(pet && pet.age)||''}" placeholder="岁"></div>
+                    <div><label class="text-[13px] text-slate-500 mb-1.5 block">体重</label><input id="petWeight" type="number" step="0.1" class="input-field" value="${(pet && pet.weight)||''}" placeholder="kg"></div>
                     <div><label class="text-[13px] text-slate-500 mb-1.5 block">性别</label>
                         <div class="flex gap-1.5 mt-0.5">
                             <button onclick="selectGender('male')" class="pill ${(!pet||pet.gender==='male')?'pill-active':'pill-default'} text-[12px]" data-gd="male">♂ 公</button>
-                            <button onclick="selectGender('female')" class="pill ${pet?.gender==='female'?'pill-active':'pill-default'} text-[12px]" data-gd="female">♀ 母</button>
+                            <button onclick="selectGender('female')" class="pill ${(pet && pet.gender)==='female'?'pill-active':'pill-default'} text-[12px]" data-gd="female">♀ 母</button>
                         </div>
                     </div>
                 </div>
                 <button onclick="savePet('${editId||''}')" class="btn-primary w-full py-3 text-[14px] mt-2">${pet?'保存修改':'确认添加'}</button>
             </div>`;
         document.getElementById('petFormModal').classList.remove('hidden');
-        window._petSpecies=pet?.species||'dog';
-        window._petGender=pet?.gender||'male';
+        window._petSpecies=(pet && pet.species)||'dog';
+        window._petGender=(pet && pet.gender)||'male';
         window._petPhoto=undefined;
     }
 
@@ -2160,7 +2160,7 @@
                 <div class="absolute -bottom-4 -left-4 w-28 h-28 bg-white/10 rounded-full"></div>
                 <div class="relative flex items-center justify-between">
                     <div>
-                        <h2 class="text-[20px] font-extrabold">${appData.hospital?.name||'我的医院'}</h2>
+                        <h2 class="text-[20px] font-extrabold">${(appData.hospital && appData.hospital.name)||'我的医院'}</h2>
                         <p class="text-[13px] opacity-80 mt-2 flex items-center gap-2"><i class="fas fa-map-marker-alt"></i>${currentCity||'定位中'}</p>
                     </div>
                     <div class="text-right">
@@ -2203,8 +2203,8 @@
                     return`
                     <div class="flex items-center justify-between py-4 border-b border-slate-50 last:border-0">
                         <div class="flex items-center gap-3">
-                            ${pet?.photo?'<img src="'+pet.photo+'" class="w-10 h-10 rounded-full object-cover shadow" style="flex-shrink:0;border:2px solid #6C3CE7">':'<span class="text-4xl">'+(pet?petIconSvg(pet.species,pet.gender):'🐾')+'</span>'}
-                            <div><p class="text-[15px] font-bold">${pet?.name||'未知'}</p><p class="text-[11px] text-slate-400">${a.service} · ${a.time}</p></div>
+                            ${(pet && pet.photo)?'<img src="'+pet.photo+'" class="w-10 h-10 rounded-full object-cover shadow" style="flex-shrink:0;border:2px solid #6C3CE7">':'<span class="text-4xl">'+(pet?petIconSvg(pet.species,pet.gender):'🐾')+'</span>'}
+                            <div><p class="text-[15px] font-bold">${(pet && pet.name)||'未知'}</p><p class="text-[11px] text-slate-400">${a.service} · ${a.time}</p></div>
                         </div>
                         ${a.status==='pending'?`<div class="flex gap-1.5"><button onclick="confirmAppt('${a.id}')" class="px-5 py-2.5 text-white rounded-2xl text-[13px] font-bold shadow-lg" style="background:linear-gradient(135deg,#00D2A0,#4ADE80);box-shadow:0 4px 16px rgba(0,210,160,.3)">接单</button><button onclick="rejectAppt('${a.id}')" class="px-5 py-2.5 text-white rounded-2xl text-[13px] font-bold shadow-lg" style="background:linear-gradient(135deg,#EF4444,#F87171);box-shadow:0 4px 16px rgba(239,68,68,.3)">拒单</button></div>`:
                         `<span class="badge ${a.status==='confirmed'?'badge-confirmed':'bg-slate-100 text-slate-500'}">${a.status==='confirmed'?'已确认':a.status==='completed'?'已完成':'已拒绝'}</span>`}
@@ -2226,7 +2226,7 @@
                     <div class="flex items-center justify-between mb-4">
                         <div class="flex items-center gap-3">
                             <span class="text-3xl">${pet?petIconSvg(pet.species,pet.gender):'🐾'}</span>
-                            <div><p class="text-[15px] font-bold">${pet?.name||'未知'}</p><p class="text-[11px] text-slate-400">${pet?.breed||''} · ${pet?.gender==='male'?'公':'母'}</p></div>
+                            <div><p class="text-[15px] font-bold">${(pet && pet.name)||'未知'}</p><p class="text-[11px] text-slate-400">${(pet && pet.breed)||''} · ${(pet && pet.gender)==='male'?'公':'母'}</p></div>
                         </div>
                         <span class="badge ${a.status==='pending'?'badge-pending':a.status==='confirmed'?'badge-confirmed':a.status==='completed'?'badge-completed':'bg-slate-100 text-slate-500'}">${{pending:'待确认',confirmed:'已确认',completed:'已完成',cancelled:'已取消',rejected:'已拒绝'}[a.status]||a.status}</span>
                     </div>
@@ -2454,7 +2454,7 @@ function renderBProfile(){
             const pet=appData.pets.find(p=>p.id===a.petId);
             if(!appData.medicalRecords)appData.medicalRecords=[];
             appData.medicalRecords.push({
-                petName:pet?.name||'',date:a.date,hospital:a.hospitalName,
+                petName:(pet && pet.name)||'',date:a.date,hospital:a.hospitalName,
                 doctor:a.doctorName||'',service:a.service,diagnosis:a.service+'诊疗',
                 cost:amount,paid:true
             });
@@ -2611,13 +2611,13 @@ function renderBProfile(){
             if(status==='complete'){
                 userLng=result.position.lng;userLat=result.position.lat;
                 locationAccuracy=result.accuracy||0;
-                currentCity=result.addressComponent?.city||result.addressComponent?.province||'';
-                currentDistrict=result.addressComponent?.district||'';
+                currentCity=(result.addressComponent && result.addressComponent.city)||(result.addressComponent && result.addressComponent.province)||'';
+                currentDistrict=(result.addressComponent && result.addressComponent.district)||'';
                 _locationReady=true;
                 onLocationSuccess(userLng,userLat);
             }else{
                 // 高德Geolocation失败，走CitySearch纯IP定位（任何环境都能用）
-                console.warn('[定位] 高德Geolocation失败:',result?.message||result);
+                console.warn('[定位] 高德Geolocation失败:',(result && result.message)||result);
                 citySearchLocate();
             }
         });
@@ -3387,8 +3387,8 @@ function renderBProfile(){
             service:document.getElementById('bookingService').value,
             date:document.getElementById('bookingDate').value,
             time:window._selectedTime,status:'pending',
-            doctorName:selectedDoc?.name||'',
-            doctorFee:selectedDoc?.fee||0
+            doctorName:(selectedDoc && selectedDoc.name)||'',
+            doctorFee:(selectedDoc && selectedDoc.fee)||0
         };
         appData.appointments.push(appt);
         save();closeBookingModal();closeDetailPanel();
