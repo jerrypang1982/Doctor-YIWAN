@@ -7,7 +7,7 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://webapi.amap.com/loader.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2" defer></script>
     <script>
         tailwind.config = {
             theme: {
@@ -212,7 +212,21 @@
     <meta name="mobile-web-app-capable" content="yes">
 </head>
 <body>
-    <div id="app" class="max-w-[430px] mx-auto relative overflow-hidden flex flex-col" style="background:#F8F7FF;height:100vh;height:100dvh">
+
+<script>
+    // === 全局错误兜底（v1.4.0 Safari 兼容修复） ===
+    window.onerror = function(msg, url, line, col, error) {
+        console.error('[全局错误]', msg, 'at', url, 'line:', line);
+        // 不阻止页面渲染，只记录错误
+        return false;
+    };
+    window.addEventListener('unhandledrejection', function(e) {
+        console.error('[未处理的Promise拒绝]', e.reason);
+        e.preventDefault(); // 防止控制台报错
+    });
+</script>
+
+    <div id="app" class="max-w-[430px] mx-auto relative overflow-hidden flex flex-col" style="background:#F8F7FF;height:100vh;min-height:100vh;-webkit-overflow-scrolling:touch">
         <!-- Header -->
         <header class="sticky top-0 z-50" style="background:rgba(255,255,255,.95);backdrop-filter:blur(20px);border-bottom:1px solid rgba(108,60,231,.08)">
             <div class="flex items-center justify-between px-6 h-16">
@@ -3403,52 +3417,88 @@ function renderBProfile(){
     document.addEventListener('click',e=>{
         if(!e.target.closest('#detailPanel')&&!e.target.closest('.h-marker')&&!e.target.closest('.amap-marker'))closeDetailPanel();
     });
-    document.getElementById('triageModal').addEventListener('click',e=>{if(e.target===document.getElementById('triageModal'))closeTriageModal()});
-    document.getElementById('bookingModal').addEventListener('click',e=>{if(e.target===document.getElementById('bookingModal'))closeBookingModal()});
-    document.getElementById('petFormModal').addEventListener('click',e=>{if(e.target===document.getElementById('petFormModal'))closePetForm()});
-    document.getElementById('claimModal').addEventListener('click',e=>{if(e.target===document.getElementById('claimModal'))closeClaimModal()});
+    // v1.4.0: 安全的事件监听，防止元素不存在时崩溃
+    var _triageModal = document.getElementById('triageModal');
+    if(_triageModal) _triageModal.addEventListener('click',function(e){if(e.target===_triageModal)closeTriageModal()});
+    var _bookingModal = document.getElementById('bookingModal');
+    if(_bookingModal) _bookingModal.addEventListener('click',function(e){if(e.target===_bookingModal)closeBookingModal()});
+    var _petFormModal = document.getElementById('petFormModal');
+    if(_petFormModal) _petFormModal.addEventListener('click',function(e){if(e.target===_petFormModal)closePetForm()});
+    var _claimModal = document.getElementById('claimModal');
+    if(_claimModal) _claimModal.addEventListener('click',function(e){if(e.target===_claimModal)closeClaimModal()});
 
-    // ====== 初始化 ======
-    document.addEventListener('DOMContentLoaded',()=>{
-        initSupabase();
-        switchMode('c');
-        // 检查云端登录状态
-        if(supabase){
-            CloudService.checkAuth().then(user=>{
-                if(user){
-                    console.log('[Cloud] 已登录:', user.email);
-                    // 静默加载云端数据
-                    CloudService.loadFromCloud().then(cloudData=>{
-                        if(cloudData && cloudData.pets && cloudData.pets.length > 0){
-                            // 云端有数据，合并到本地
-                            const localPetIds = (appData.pets||[]).map(p=>p.id);
-                            for(const cp of cloudData.pets){
-                                if(!localPetIds.includes(cp.id)) appData.pets.push(cp);
-                            }
-                            const cloudVacKeys = (appData.vaccinations||[]).map(v=>v.petId+'|'+v.name+'|'+v.date);
-                            for(const cv of (cloudData.vaccinations||[])){
-                                if(!cloudVacKeys.includes(cv.petId+'|'+cv.name+'|'+cv.date)) appData.vaccinations.push(cv);
-                            }
-                            const cloudRecKeys = (appData.medicalRecords||[]).map(r=>r.petId+'|'+r.service+'|'+r.date);
-                            for(const cr of (cloudData.medicalRecords||[])){
-                                if(!cloudRecKeys.includes(cr.petId+'|'+cr.service+'|'+cr.date)) appData.medicalRecords.push(cr);
-                            }
-                            save();
-                            console.log('[Cloud] 数据已合并');
-                        }
-                    });
+    // ====== 初始化（v1.4.0 Safari 兼容修复） ======
+    document.addEventListener('DOMContentLoaded',function(){
+        console.log('[Doctor亿万] DOMContentLoaded 触发');
+        // 第一步：立即渲染页面内容（不依赖任何外部库）
+        try{
+            switchMode('c');
+            console.log('[Doctor亿万] 页面渲染完成');
+        }catch(e){
+            console.error('[Doctor亿万] 页面渲染失败:',e);
+            // 即使渲染失败，也显示一个基本提示
+            var cc = document.getElementById('cContent');
+            if(cc) cc.innerHTML = '<div style="padding:40px;text-align:center;color:#666"><p>页面加载出错，请刷新重试</p></div>';
+        }
+        // 第二步：Supabase 延迟初始化（SDK可能还没加载完，不阻塞页面）
+        if(window.supabase){
+            try{initSupabase();}catch(e){console.error('[后端] 初始化失败:',e);}
+        }else{
+            var retryCount=0;
+            var retryTimer=setInterval(function(){
+                retryCount++;
+                if(window.supabase){
+                    clearInterval(retryTimer);
+                    try{initSupabase();}catch(e){console.error('[后端] 延迟初始化失败:',e);}
+                    console.log('[后端] Supabase SDK延迟加载成功');
                 }
-            });
+                if(retryCount>10){
+                    clearInterval(retryTimer);
+                    console.log('[后端] Supabase SDK加载超时，使用本地模式');
+                }
+            },1000);
         }
-        // 1. 先用缓存位置更新首页UI
-        if(restoreUserLocation()){
-            _locationReady=true;
-            updateLocationDisplay(currentStreet||currentDistrict||currentCity||'定位中');
-            // 缓存位置有效时，立即搜索附近医院
-            if(window.AMap)searchNearbyHospitals();
-        }
-        // 2. 立即加载高德SDK并自动定位（无需打开地图，会刷新更精确的位置）
-        initAMap();
+        // 检查云端登录状态（v1.4.0: 加 try/catch 防止云端错误影响页面）
+        try{
+            if(supabase){
+                CloudService.checkAuth().then(function(user){
+                    if(user){
+                        console.log('[Cloud] 已登录:', user.email);
+                        CloudService.loadFromCloud().then(function(cloudData){
+                            if(cloudData && cloudData.pets && cloudData.pets.length > 0){
+                                var localPetIds = (appData.pets||[]).map(function(p){return p.id;});
+                                for(var ci=0; ci<cloudData.pets.length; ci++){
+                                    var cp = cloudData.pets[ci];
+                                    if(localPetIds.indexOf(cp.id)===-1) appData.pets.push(cp);
+                                }
+                                var cloudVacKeys = (appData.vaccinations||[]).map(function(v){return v.petId+'|'+v.name+'|'+v.date;});
+                                for(var vi=0; vi<(cloudData.vaccinations||[]).length; vi++){
+                                    var cv = cloudData.vaccinations[vi];
+                                    if(cloudVacKeys.indexOf(cv.petId+'|'+cv.name+'|'+cv.date)===-1) appData.vaccinations.push(cv);
+                                }
+                                var cloudRecKeys = (appData.medicalRecords||[]).map(function(r){return r.petId+'|'+r.service+'|'+r.date;});
+                                for(var ri=0; ri<(cloudData.medicalRecords||[]).length; ri++){
+                                    var cr = cloudData.medicalRecords[ri];
+                                    if(cloudRecKeys.indexOf(cr.petId+'|'+cr.service+'|'+cr.date)===-1) appData.medicalRecords.push(cr);
+                                }
+                                save();
+                                console.log('[Cloud] 数据已合并');
+                            }
+                        }).catch(function(e){console.error('[Cloud] 加载云端数据失败:',e);});
+                    }
+                }).catch(function(e){console.error('[Cloud] 检查登录状态失败:',e);});
+            }
+        }catch(e){console.error('[Cloud] 云端初始化异常:',e);}
+        // 1. 先用缓存位置更新首页UI（v1.4.0: try/catch 包裹）
+        try{
+            if(restoreUserLocation()){
+                _locationReady=true;
+                updateLocationDisplay(currentStreet||currentDistrict||currentCity||'定位中');
+                if(window.AMap){try{searchNearbyHospitals();}catch(e){console.error('[地图] 搜索失败:',e);}}
+            }
+        }catch(e){console.error('[定位] 缓存位置恢复失败:',e);}
+        // 2. 立即加载高德SDK并自动定位
+        try{initAMap();}catch(e){console.error('[地图] 初始化失败:',e);}
     });
     </script>
 
