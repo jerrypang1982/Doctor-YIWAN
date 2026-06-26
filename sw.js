@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'v1.6.0';
+const CACHE_VERSION = 'v1.7.0';
 const CACHE_NAME = `doctor-yiyi-${CACHE_VERSION}`;
 
 // éœ€è¦ç¼“å­˜çš„å…³é”®èµ„æº
