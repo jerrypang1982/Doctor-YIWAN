@@ -7,7 +7,8 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://webapi.amap.com/loader.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <script src="https://unpkg.com/@supabase/supabase-js@2?v=1.5.0"></script>
+    <script src="https://unpkg.com/@supabase/supabase-js@2?v=1.6.0"></script>
+    <script>window.supabase=(typeof supabase!=='undefined')?supabase:undefined;</script>
 <script>window.supabase=(typeof supabase!=='undefined')?supabase:undefined;</script>
     <script>
         tailwind.config = {
@@ -3554,15 +3555,13 @@ function renderBProfile(){
                         console.log('[PWA] SW注册成功, scope:', reg.scope);
                         // 检查更新
                         reg.update();
-                        // 检测新版本
+                       // 检测新版本 - 自动激活无需用户确认
                         reg.onupdatefound = function() {
                             var installing = reg.installing;
                             installing.onstatechange = function() {
                                 if (installing.state === 'installed' && navigator.serviceWorker.controller) {
-                                    if(confirm('🐾 Doctor亿万有新版本啦！\n点击确定立即更新，体验最新功能。')){
-                                        reg.waiting.postMessage('SKIP_WAITING');
-                                        setTimeout(function(){ location.reload(); }, 300);
-                                    }
+                                    // 自动跳过等待，激活新SW
+                                    installing.postMessage({type: 'SKIP_WAITING'});
                                 }
                             };
                         };
