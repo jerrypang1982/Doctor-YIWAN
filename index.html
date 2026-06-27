@@ -3,42 +3,45 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <title>Doctor亿万 - 宠物全生命周期医疗平台</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://webapi.amap.com/loader.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script>
-// Supabase SDK 多CDN容错加载（中国优先jsdelivr，海外备用unpkg）
-(function(){
-    var cdns = [
-        'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.108.2/dist/umd/supabase.js',
-        'https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js'
-    ];
-    var idx = 0;
-    function tryLoad(){
-        if(idx >= cdns.length){
-            console.error('[SDK] 所有CDN加载失败');
-            return;
-        }
-        var s = document.createElement('script');
-        s.src = cdns[idx];
-        s.onload = function(){
-            if(typeof supabase !== 'undefined' && !window.supabase){
-                window.supabase = supabase;
+    // Supabase SDK 多CDN容错加载（中国优先jsdelivr，海外备用unpkg）
+    (function(){
+        var cdns = [
+            'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.108.2/dist/umd/supabase.js',
+            'https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js'
+        ];
+        var idx = 0;
+        function tryLoad(){
+            if(idx >= cdns.length){
+                console.error('[SDK] 所有CDN加载失败');
+                return;
             }
-            console.log('[SDK] 加载成功:', cdns[idx]);
-        };
-        s.onerror = function(){
-            console.warn('[SDK] CDN失败:', cdns[idx], '尝试下一个');
-            idx++;
-            tryLoad();
-        };
-        document.head.appendChild(s);
-    }
-    tryLoad();
-})();
-</script>
-<script>window.supabase=(typeof supabase!=='undefined')?supabase:undefined;</script>
+            var s = document.createElement('script');
+            s.src = cdns[idx];
+            s.onload = function(){
+                // UMD bundle 用 var supabase，确保挂到 window
+                if(typeof supabase !== 'undefined' && !window.supabase){
+                    window.supabase = supabase;
+                }
+                console.log('[SDK] 加载成功:', cdns[idx]);
+            };
+            s.onerror = function(){
+                console.warn('[SDK] CDN失败:', cdns[idx], '尝试下一个');
+                idx++;
+                tryLoad();
+            };
+            document.head.appendChild(s);
+        }
+        tryLoad();
+    })();
+    </script>
     <script>
         tailwind.config = {
             theme: {
@@ -3579,20 +3582,22 @@ function renderBProfile(){
         // === Service Worker 注册 ===
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', function() {
-                navigator.serviceWorker.register('./sw.js', { scope: './' })
+                navigator.serviceWorker.register('./sw.js', { scope: './', updateViaCache: 'none' })
                     .then(function(reg) {
                         console.log('[PWA] SW注册成功, scope:', reg.scope);
                         // 检查更新
                         reg.update();
-                       // 检测新版本 - 自动激活无需用户确认
-                       reg.onupdatefound = function() {
-    var installing = reg.installing;
-    installing.onstatechange = function() {
-        if (installing.state === 'installed' && navigator.serviceWorker.controller) {
-            installing.postMessage({type: 'SKIP_WAITING'});
-        }
-    };
-};
+                        // 检测新版本 - 自动激活无需用户确认
+                        reg.onupdatefound = function() {
+                            var installing = reg.installing;
+                            installing.onstatechange = function() {
+                                if (installing.state === 'installed' && navigator.serviceWorker.controller) {
+                                    // 自动跳过等待，激活新SW
+                                    installing.postMessage({type: 'SKIP_WAITING'});
+                                }
+                            };
+                        };
+                    })
                     .catch(function(err) {
                         console.log('[PWA] SW注册失败:', err);
                     });
