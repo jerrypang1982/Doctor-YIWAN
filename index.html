@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -11,36 +12,24 @@
     <script src="https://webapi.amap.com/loader.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script>
-    // Supabase SDK 多CDN容错加载（中国优先jsdelivr，海外备用unpkg）
-    (function(){
-        var cdns = [
-            'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.108.2/dist/umd/supabase.js',
-            'https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js'
-        ];
-        var idx = 0;
-        function tryLoad(){
-            if(idx >= cdns.length){
-                console.error('[SDK] 所有CDN加载失败');
-                return;
-            }
-            var s = document.createElement('script');
-            s.src = cdns[idx];
-            s.onload = function(){
-                // UMD bundle 用 var supabase，确保挂到 window
-                if(typeof supabase !== 'undefined' && !window.supabase){
-                    window.supabase = supabase;
-                }
-                console.log('[SDK] 加载成功:', cdns[idx]);
-            };
-            s.onerror = function(){
-                console.warn('[SDK] CDN失败:', cdns[idx], '尝试下一个');
-                idx++;
-                tryLoad();
-            };
-            document.head.appendChild(s);
-        }
-        tryLoad();
-    })();
+    // Supabase SDK 同步加载（CDN1失败自动切CDN2）
+    function loadSupabaseFallback(){
+        console.warn('[SDK] jsdelivr加载失败，尝试unpkg备用CDN');
+        var s2=document.createElement('script');
+        s2.src='https://unpkg.com/@supabase/supabase-js@2.108.2/dist/umd/supabase.js';
+        s2.onload=function(){
+            window.supabase=window.supabase||this._sb;
+            console.log('[SDK] unpkg加载成功');
+        };
+        s2.onerror=function(){console.error('[SDK] 所有CDN加载失败，后端不可用');};
+        document.head.appendChild(s2);
+    }
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.108.2/dist/umd/supabase.js" onerror="loadSupabaseFallback()"></script>
+    <script>
+    // 确保 window.supabase 可用
+    if(typeof supabase!=='undefined'&&!window.supabase){window.supabase=supabase;}
+    if(window.supabase){console.log('[SDK] Supabase SDK已就绪');}
     </script>
     <script>
         tailwind.config = {
@@ -1498,6 +1487,10 @@
         _authMode = 'login';
         document.getElementById('authEmail').value = '';
         document.getElementById('authPassword').value = '';
+        var inviteInput = document.getElementById('inviteCode');
+        if(inviteInput) inviteInput.value = '';
+        var inviteWrap = document.getElementById('inviteCodeWrap');
+        if(inviteWrap) inviteWrap.classList.add('hidden');
         document.getElementById('authError').classList.add('hidden');
         document.getElementById('authSubmitBtn').textContent = '登录';
         document.getElementById('authToggleBtn').textContent = '没有账号？去注册';
@@ -1509,14 +1502,17 @@
     }
 
     function toggleAuthMode() {
+        var inviteWrap = document.getElementById('inviteCodeWrap');
         if (_authMode === 'login') {
             _authMode = 'register';
             document.getElementById('authSubmitBtn').textContent = '注册';
             document.getElementById('authToggleBtn').textContent = '已有账号？去登录';
+            if(inviteWrap) inviteWrap.classList.remove('hidden');
         } else {
             _authMode = 'login';
             document.getElementById('authSubmitBtn').textContent = '登录';
             document.getElementById('authToggleBtn').textContent = '没有账号？去注册';
+            if(inviteWrap) inviteWrap.classList.add('hidden');
         }
         document.getElementById('authError').classList.add('hidden');
     }
@@ -1550,7 +1546,42 @@
 
         let result;
         if (_authMode === 'register') {
+            // 验证邀请码
+            var inviteCode = (document.getElementById('inviteCode').value || '').trim().toUpperCase();
+            if (!inviteCode) {
+                errEl.textContent = '内测期间注册需要填写邀请码';
+                errEl.classList.remove('hidden');
+                btn.textContent = '注册';
+                btn.disabled = false;
+                return;
+            }
+            btn.textContent = '验证邀请码...';
+            try {
+                var check = await supabase.rpc('validate_invite', { p_code: inviteCode });
+                if (check.error || !check.data || !check.data.valid) {
+                    errEl.textContent = (check.data && check.data.message) || '邀请码无效';
+                    errEl.classList.remove('hidden');
+                    btn.textContent = '注册';
+                    btn.disabled = false;
+                    return;
+                }
+            } catch(e) {
+                console.error('[邀请码] 验证失败:', e);
+                errEl.textContent = '邀请码验证服务暂不可用，请稍后重试';
+                errEl.classList.remove('hidden');
+                btn.textContent = '注册';
+                btn.disabled = false;
+                return;
+            }
+            // 邀请码有效，执行注册
+            btn.textContent = '注册中...';
             result = await CloudService.signUp(email, password);
+            // 注册成功后消费邀请码
+            if (result.ok) {
+                try {
+                    await supabase.rpc('use_invite', { p_code: inviteCode });
+                } catch(e) { console.warn('[邀请码] 消费失败:', e); }
+            }
         } else {
             result = await CloudService.signIn(email, password);
         }
@@ -1652,40 +1683,175 @@
         showToast('已退出登录');
         showCPage('profile');
     }
-    // ====== 反馈弹窗 ======
+    // ====== 反馈弹窗（结构化）======
+    var _fbRating = 0;
     function showFeedbackModal(){
-        const modal = document.createElement('div');
+        _fbRating = 0;
+        var modal = document.createElement('div');
         modal.id = 'feedbackModal';
         modal.className = 'fixed inset-0 z-[2000] flex items-end justify-center';
         modal.style.cssText = 'background:rgba(0,0,0,.4)';
         modal.onclick = function(e){ if(e.target===modal) modal.remove(); };
-        modal.innerHTML = `
-        <div class="bg-white w-full max-w-[430px] rounded-t-3xl p-6 pb-10" style="animation:slideUp .3s ease-out">
-            <div class="flex justify-between items-center mb-5">
-                <h3 class="text-[18px] font-extrabold">💬 意见反馈</h3>
-                <button onclick="this.closest('.fixed').remove()" class="text-slate-400"><i class="fas fa-xmark text-lg"></i></button>
-            </div>
-            <p class="text-[13px] text-slate-500 mb-4">你的建议对我们非常重要，有任何问题或建议请告诉我们。</p>
-            <textarea id="feedbackText" class="input-field w-full h-28 text-[13px] resize-none" placeholder="请描述你的问题或建议..."></textarea>
-            <div class="mt-3">
-                <input id="feedbackContact" type="text" class="input-field w-full text-[13px]" placeholder="联系方式（邮箱/手机号，选填）">
-            </div>
-            <div class="mt-4 flex gap-3">
-                <button onclick="submitFeedback()" class="btn-primary flex-1 py-3 text-[14px]">提交反馈</button>
-                <button onclick="window.location.href='mailto:doctor_yiwan@163.com?subject=Doctor亿万用户反馈'" class="flex-1 py-3 text-[14px] font-bold rounded-xl border-2" style="color:#6C3CE7;border-color:#6C3CE7">📧 发邮件</button>
-            </div>
-            <p class="text-[11px] text-slate-400 mt-3 text-center">也可以直接发送邮件至 doctor_yiwan@163.com</p>
-        </div>`;
+        modal.innerHTML = '<div class="bg-white w-full max-w-[430px] rounded-t-3xl p-6 pb-10" style="animation:slideUp .3s ease-out;max-height:90vh;overflow-y:auto">'
+            + '<div class="flex justify-between items-center mb-4">'
+            + '<h3 class="text-[18px] font-extrabold">💬 意见反馈</h3>'
+            + '<button onclick="this.closest(\'.fixed\').remove()" class="text-slate-400"><i class="fas fa-xmark text-lg"></i></button>'
+            + '</div>'
+            + '<p class="text-[13px] text-slate-500 mb-4">你的建议对我们非常重要！</p>'
+            // 评分
+            + '<div class="mb-4">'
+            + '<label class="text-[13px] font-bold text-slate-700 mb-2 block">整体评分</label>'
+            + '<div id="fbStars" class="flex gap-2">'
+            + '<span onclick="setFbRating(1)" class="fb-star text-[28px] cursor-pointer" style="color:#D1D5DB">★</span>'
+            + '<span onclick="setFbRating(2)" class="fb-star text-[28px] cursor-pointer" style="color:#D1D5DB">★</span>'
+            + '<span onclick="setFbRating(3)" class="fb-star text-[28px] cursor-pointer" style="color:#D1D5DB">★</span>'
+            + '<span onclick="setFbRating(4)" class="fb-star text-[28px] cursor-pointer" style="color:#D1D5DB">★</span>'
+            + '<span onclick="setFbRating(5)" class="fb-star text-[28px] cursor-pointer" style="color:#D1D5DB">★</span>'
+            + '<span id="fbRatingText" class="ml-2 text-[12px] text-slate-400 self-center">点击评分</span>'
+            + '</div></div>'
+            // 问题类型
+            + '<div class="mb-4">'
+            + '<label class="text-[13px] font-bold text-slate-700 mb-2 block">问题类型</label>'
+            + '<div class="flex flex-wrap gap-2" id="fbCategoryWrap">'
+            + '<div onclick="selectFbCategory(this,\'bug\')" class="fb-cat px-3 py-1.5 rounded-full text-[12px] font-bold border-2 cursor-pointer" style="border-color:#E2E8F0;color:#64748B">🐛 功能异常</div>'
+            + '<div onclick="selectFbCategory(this,\'feature\')" class="fb-cat px-3 py-1.5 rounded-full text-[12px] font-bold border-2 cursor-pointer" style="border-color:#E2E8F0;color:#64748B">💡 功能建议</div>'
+            + '<div onclick="selectFbCategory(this,\'ux\')" class="fb-cat px-3 py-1.5 rounded-full text-[12px] font-bold border-2 cursor-pointer" style="border-color:#E2E8F0;color:#64748B">🎨 体验优化</div>'
+            + '<div onclick="selectFbCategory(this,\'performance\')" class="fb-cat px-3 py-1.5 rounded-full text-[12px] font-bold border-2 cursor-pointer" style="border-color:#E2E8F0;color:#64748B">⚡ 性能问题</div>'
+            + '<div onclick="selectFbCategory(this,\'other\')" class="fb-cat px-3 py-1.5 rounded-full text-[12px] font-bold border-2 cursor-pointer" style="border-color:#E2E8F0;color:#64748B">📝 其他</div>'
+            + '</div></div>'
+            // 标题
+            + '<div class="mb-3">'
+            + '<input id="fbTitle" type="text" class="input-field w-full text-[13px]" placeholder="一句话概括（选填）" maxlength="50">'
+            + '</div>'
+            // 详细描述
+            + '<div class="mb-3">'
+            + '<textarea id="fbDesc" class="input-field w-full h-24 text-[13px] resize-none" placeholder="请详细描述你遇到的问题或建议..."></textarea>'
+            + '</div>'
+            // 联系方式
+            + '<div class="mb-4">'
+            + '<input id="fbContact" type="text" class="input-field w-full text-[13px]" placeholder="联系方式（选填，方便我们回复你）">'
+            + '</div>'
+            // 设备信息（自动采集，用户不可编辑）
+            + '<div id="fbDeviceInfo" class="mb-4 p-3 rounded-xl text-[11px] text-slate-400" style="background:#F8F7FF"></div>'
+            // 提交
+            + '<div class="flex gap-3">'
+            + '<button onclick="submitStructuredFeedback()" class="btn-primary flex-1 py-3 text-[14px]">提交反馈</button>'
+            + '<button onclick="window.location.href=\'mailto:doctor_yiwan@163.com?subject=Doctor亿万用户反馈\'" class="flex-1 py-3 text-[14px] font-bold rounded-xl border-2" style="color:#6C3CE7;border-color:#6C3CE7">📧 发邮件</button>'
+            + '</div>'
+            + '<p class="text-[11px] text-slate-400 mt-3 text-center">也可以直接发送邮件至 doctor_yiwan@163.com</p>'
+            + '</div>';
         document.body.appendChild(modal);
+        // 自动采集设备信息
+        collectDeviceInfo();
     }
 
-    function submitFeedback(){
-        const text = document.getElementById('feedbackText').value.trim();
-        const contact = document.getElementById('feedbackContact').value.trim();
-        if(!text){ showToast('请填写反馈内容'); return; }
-        const feedbacks = JSON.parse(localStorage.getItem('doctor_yiyi_feedbacks')||'[]');
-        feedbacks.push({ text, contact, time: new Date().toISOString(), version: '3.4' });
+    function setFbRating(n){
+        _fbRating = n;
+        var stars = document.querySelectorAll('.fb-star');
+        var labels = ['','很差','较差','一般','满意','非常满意'];
+        for(var i=0;i<stars.length;i++){
+            stars[i].style.color = i < n ? '#F59E0B' : '#D1D5DB';
+        }
+        document.getElementById('fbRatingText').textContent = labels[n];
+        document.getElementById('fbRatingText').style.color = '#F59E0B';
+    }
+
+    var _fbCategory = '';
+    function selectFbCategory(el, cat){
+        _fbCategory = cat;
+        var cats = document.querySelectorAll('.fb-cat');
+        for(var i=0;i<cats.length;i++){
+            cats[i].style.borderColor = '#E2E8F0';
+            cats[i].style.color = '#64748B';
+            cats[i].style.background = 'transparent';
+        }
+        el.style.borderColor = '#6C3CE7';
+        el.style.color = '#6C3CE7';
+        el.style.background = '#F3E8FF';
+    }
+
+    function collectDeviceInfo(){
+        var ua = navigator.userAgent || '';
+        var platform = '未知';
+        if(/iPhone/.test(ua)) platform = 'iPhone';
+        else if(/iPad/.test(ua)) platform = 'iPad';
+        else if(/Android/.test(ua)){
+            var m = ua.match(/Android[\s\/]*([\d.]+)/);
+            platform = 'Android ' + (m ? m[1] : '');
+        }
+        else if(/Mac OS/.test(ua)) platform = 'macOS';
+        else if(/Windows/.test(ua)) platform = 'Windows';
+        else if(/Linux/.test(ua)) platform = 'Linux';
+        var browser = '未知';
+        if(/CriOS/.test(ua)) browser = 'Chrome iOS';
+        else if(/FxiOS/.test(ua)) browser = 'Firefox iOS';
+        else if(/Edg/.test(ua)) browser = 'Edge';
+        else if(/Chrome/.test(ua)) browser = 'Chrome';
+        else if(/Safari/.test(ua)) browser = 'Safari';
+        var screen = window.screen ? (window.screen.width + 'x' + window.screen.height) : '未知';
+        var isStandalone = window.matchMedia && window.matchMedia('(display-mode: standalone)').matches;
+        var info = '📱 ' + platform + ' · ' + browser + ' · 屏幕' + screen + (isStandalone ? ' · 主屏App模式' : ' · 浏览器');
+        var el = document.getElementById('fbDeviceInfo');
+        if(el) el.textContent = info;
+    }
+
+    async function submitStructuredFeedback(){
+        var title = (document.getElementById('fbTitle').value || '').trim();
+        var desc = (document.getElementById('fbDesc').value || '').trim();
+        var contact = (document.getElementById('fbContact').value || '').trim();
+        if(!desc){ showToast('请填写反馈内容'); return; }
+        if(!_fbCategory){ showToast('请选择问题类型'); return; }
+
+        var deviceInfo = '';
+        var el = document.getElementById('fbDeviceInfo');
+        if(el) deviceInfo = el.textContent;
+
+        var fbData = {
+            rating: _fbRating || null,
+            category: _fbCategory,
+            title: title,
+            description: desc,
+            contact: contact,
+            device_info: deviceInfo,
+            app_version: '3.4',
+            time: new Date().toISOString()
+        };
+
+        // 尝试提交到Supabase
+        var submitted = false;
+        if(supabase){
+            try {
+                var insertData = {
+                    rating: _fbRating || null,
+                    category: _fbCategory,
+                    title: title || '(无标题)',
+                    description: desc,
+                    device_info: deviceInfo,
+                    app_version: '3.4'
+                };
+                // 如果有登录用户，关联user_id
+                var userResult = await supabase.auth.getUser();
+                if(userResult && userResult.data && userResult.data.user){
+                    insertData.user_id = userResult.data.user.id;
+                    insertData.user_email = userResult.data.user.email;
+                }
+                var res = await supabase.from('feedback').insert(insertData);
+                if(!res.error){
+                    submitted = true;
+                    console.log('[反馈] 已提交到Supabase');
+                } else {
+                    console.warn('[反馈] Supabase提交失败:', res.error);
+                }
+            } catch(e){
+                console.warn('[反馈] Supabase异常:', e);
+            }
+        }
+
+        // 同时保存到localStorage作为备份
+        var feedbacks = JSON.parse(localStorage.getItem('doctor_yiyi_feedbacks')||'[]');
+        feedbacks.push(fbData);
         localStorage.setItem('doctor_yiyi_feedbacks', JSON.stringify(feedbacks));
+
         document.getElementById('feedbackModal').remove();
         showToast('感谢反馈！我们会认真阅读每一条建议 🙏');
     }
@@ -3547,6 +3713,10 @@ function renderBProfile(){
             <div class="space-y-3">
                 <input id="authEmail" type="email" class="input-field" placeholder="邮箱地址" autocomplete="email">
                 <input id="authPassword" type="password" class="input-field" placeholder="密码（至少6位）" autocomplete="current-password">
+                <div id="inviteCodeWrap" class="hidden">
+                    <input id="inviteCode" type="text" class="input-field" placeholder="邀请码（内测必填）" maxlength="12" autocomplete="off" style="text-transform:uppercase;letter-spacing:2px;font-weight:700">
+                    <p id="inviteHint" class="text-[11px] text-slate-400 mt-1 ml-1">内测期间需要邀请码才能注册，请联系管理员获取</p>
+                </div>
                 <div id="authError" class="text-[12px] text-red-500 hidden"></div>
                 <label class="flex items-start gap-2 cursor-pointer select-none">
                     <input type="checkbox" id="authAgree" class="mt-0.5 w-4 h-4 rounded accent-[#6C3CE7] flex-shrink-0">
