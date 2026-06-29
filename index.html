@@ -1494,22 +1494,40 @@
 
     // ====== 登录/注册功能 ======
     let _authMode = 'login'; // 'login' or 'register'
+    var _gateMode = false; // 内测门控：未登录时阻止使用APP
 
-    function showAuthModal() {
-        _authMode = 'login';
+    function showAuthModal(gateMode) {
+        _authMode = gateMode ? 'register' : 'login';
+        _gateMode = !!gateMode;
         document.getElementById('authEmail').value = '';
         document.getElementById('authPassword').value = '';
         var inviteInput = document.getElementById('inviteCode');
         if(inviteInput) inviteInput.value = '';
         var inviteWrap = document.getElementById('inviteCodeWrap');
-        if(inviteWrap) inviteWrap.classList.add('hidden');
+        if(inviteWrap){
+            if(_authMode === 'register') inviteWrap.classList.remove('hidden');
+            else inviteWrap.classList.add('hidden');
+        }
         document.getElementById('authError').classList.add('hidden');
-        document.getElementById('authSubmitBtn').textContent = '登录';
-        document.getElementById('authToggleBtn').textContent = '没有账号？去注册';
+        document.getElementById('authSubmitBtn').textContent = _authMode === 'register' ? '注册' : '登录';
+        document.getElementById('authToggleBtn').textContent = _authMode === 'register' ? '已有账号？去登录' : '没有账号？去注册';
+        // 门控模式：隐藏关闭按钮，修改标题
+        var closeBtn = document.getElementById('authCloseBtn');
+        var modalTitle = document.getElementById('authModalTitle');
+        var modalDesc = document.getElementById('authModalDesc');
+        if(closeBtn) closeBtn.style.display = _gateMode ? 'none' : '';
+        if(modalTitle) modalTitle.textContent = _gateMode ? '🔒 内测邀请' : '☁️ 云端账号';
+        if(modalDesc) modalDesc.textContent = _gateMode ? 'Doctor亿万目前处于内测阶段，请使用邀请码注册或登录以继续使用全部功能。' : '登录后，宠物档案、疫苗记录、就诊记录自动同步到云端，换手机也不丢失。';
         document.getElementById('authModal').classList.remove('hidden');
     }
 
     function closeAuthModal() {
+        if(_gateMode) return; // 门控模式下不允许关闭
+        document.getElementById('authModal').classList.add('hidden');
+    }
+
+    function dismissGate() {
+        _gateMode = false;
         document.getElementById('authModal').classList.add('hidden');
     }
 
@@ -1527,6 +1545,13 @@
             if(inviteWrap) inviteWrap.classList.add('hidden');
         }
         document.getElementById('authError').classList.add('hidden');
+        // 门控模式下保持标题和描述不变
+        var modalTitle = document.getElementById('authModalTitle');
+        var modalDesc = document.getElementById('authModalDesc');
+        if(_gateMode){
+            if(modalTitle) modalTitle.textContent = '🔒 内测邀请';
+            if(modalDesc) modalDesc.textContent = 'Doctor亿万目前处于内测阶段，请使用邀请码注册或登录以继续使用全部功能。';
+        }
     }
 
     async function handleAuthSubmit() {
@@ -1601,12 +1626,27 @@
         btn.disabled = false;
 
         if (result.ok) {
-            closeAuthModal();
             if (_authMode === 'register') {
                 showToast('注册成功！请验证邮箱后登录');
                 _authMode = 'login';
+                // 门控模式下：注册后切换到登录模式，不关闭弹窗
+                if(_gateMode){
+                    toggleAuthMode(); // 切到login
+                    // 保持gate模式
+                    _gateMode = true;
+                    var closeBtn2 = document.getElementById('authCloseBtn');
+                    if(closeBtn2) closeBtn2.style.display = 'none';
+                    var mt2 = document.getElementById('authModalTitle');
+                    var md2 = document.getElementById('authModalDesc');
+                    if(mt2) mt2.textContent = '🔒 内测邀请';
+                    if(md2) md2.textContent = 'Doctor亿万目前处于内测阶段，请使用邀请码注册或登录以继续使用全部功能。';
+                } else {
+                    closeAuthModal();
+                }
             } else {
                 showToast('登录成功！正在同步数据...');
+                // 登录成功：关闭门控
+                dismissGate();
                 // 登录成功后加载云端数据
                 await loadCloudDataOnLogin();
                 showCPage('profile');
@@ -3648,10 +3688,11 @@ function renderBProfile(){
             console.log('[Doctor亿万] 页面渲染完成');
         }catch(e){
             console.error('[Doctor亿万] 页面渲染失败:',e);
-            // 即使渲染失败，也显示一个基本提示
             var cc = document.getElementById('cContent');
             if(cc) cc.innerHTML = '<div style="padding:40px;text-align:center;color:#666"><p>页面加载出错，请刷新重试</p></div>';
         }
+        // ====== 内测门控：未登录用户必须先注册/登录才能使用 ======
+        showAuthModal(true);
         // 第二步：Supabase 延迟初始化（SDK可能还没加载完，不阻塞页面）
         if(window.supabase){
             try{initSupabase();}catch(e){console.error('[后端] 初始化失败:',e);}
@@ -3663,6 +3704,12 @@ function renderBProfile(){
                     clearInterval(retryTimer);
                     try{initSupabase();}catch(e){console.error('[后端] 延迟初始化失败:',e);}
                     console.log('[后端] Supabase SDK延迟加载成功');
+                    // SDK就绪后检查登录状态，已登录则自动解锁
+                    try{
+                        CloudService.checkAuth().then(function(u){
+                            if(u){ dismissGate(); console.log('[Gate] 已登录用户，自动解锁'); }
+                        }).catch(function(){});
+                    }catch(e){}
                 }
                 if(retryCount>10){
                     clearInterval(retryTimer);
@@ -3676,6 +3723,7 @@ function renderBProfile(){
                 CloudService.checkAuth().then(function(user){
                     if(user){
                         console.log('[Cloud] 已登录:', user.email);
+                        dismissGate(); // 已登录，解锁APP
                         CloudService.loadFromCloud().then(function(cloudData){
                             if(cloudData && cloudData.pets && cloudData.pets.length > 0){
                                 var localPetIds = (appData.pets||[]).map(function(p){return p.id;});
@@ -3718,10 +3766,10 @@ function renderBProfile(){
     <div id="authModal" class="hidden fixed inset-0 z-[2000] flex items-end justify-center" style="background:rgba(0,0,0,.4)" onclick="if(event.target===this)closeAuthModal()">
         <div class="bg-white w-full max-w-[430px] rounded-t-3xl p-6 pb-10" style="animation:slideUp .3s ease-out">
             <div class="flex justify-between items-center mb-6">
-                <h3 class="text-[18px] font-extrabold">☁️ 云端账号</h3>
-                <button onclick="closeAuthModal()" class="text-slate-400"><i class="fas fa-xmark text-lg"></i></button>
+                <h3 id="authModalTitle" class="text-[18px] font-extrabold">☁️ 云端账号</h3>
+                <button id="authCloseBtn" onclick="closeAuthModal()" class="text-slate-400"><i class="fas fa-xmark text-lg"></i></button>
             </div>
-            <p class="text-[13px] text-slate-500 mb-5">登录后，宠物档案、疫苗记录、就诊记录自动同步到云端，换手机也不丢失。</p>
+            <p id="authModalDesc" class="text-[13px] text-slate-500 mb-5">登录后，宠物档案、疫苗记录、就诊记录自动同步到云端，换手机也不丢失。</p>
             <div class="space-y-3">
                 <input id="authEmail" type="email" class="input-field" placeholder="邮箱地址" autocomplete="email">
                 <input id="authPassword" type="password" class="input-field" placeholder="密码（至少6位）" autocomplete="current-password">
