@@ -12,28 +12,47 @@
     <script src="https://webapi.amap.com/loader.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script>
-    // Supabase SDK 异步加载（不阻塞页面渲染）
+    // Supabase SDK 异步加载（不阻塞页面渲染，多CDN容错+超时）
     (function(){
         var cdns = [
             'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.108.2/dist/umd/supabase.js',
-            'https://unpkg.com/@supabase/supabase-js@2.108.2/dist/umd/supabase.js'
+            'https://unpkg.com/@supabase/supabase-js@2.108.2/dist/umd/supabase.js',
+            'https://cdnjs.cloudflare.com/ajax/libs/supabase-js/2.108.2/supabase.js'
         ];
         var idx = 0;
+        var LOAD_TIMEOUT = 8000; // 每个CDN最多等8秒
         function tryLoad(){
             if(idx >= cdns.length){
-                console.error('[SDK] 所有CDN加载失败');
+                console.error('[SDK] 所有CDN加载失败，后端功能不可用');
                 return;
             }
             var s = document.createElement('script');
             s.src = cdns[idx];
+            var loaded = false;
+            var timeout = setTimeout(function(){
+                if(!loaded){
+                    loaded = true;
+                    console.warn('[SDK] CDN超时(8s):', cdns[idx], '尝试下一个');
+                    try { document.head.removeChild(s); } catch(e){}
+                    idx++;
+                    tryLoad();
+                }
+            }, LOAD_TIMEOUT);
             s.onload = function(){
+                if(loaded) return;
+                loaded = true;
+                clearTimeout(timeout);
                 if(typeof supabase !== 'undefined' && !window.supabase){
                     window.supabase = supabase;
                 }
                 console.log('[SDK] 加载成功:', cdns[idx]);
             };
             s.onerror = function(){
+                if(loaded) return;
+                loaded = true;
+                clearTimeout(timeout);
                 console.warn('[SDK] CDN失败:', cdns[idx], '尝试下一个');
+                try { document.head.removeChild(s); } catch(e){}
                 idx++;
                 tryLoad();
             };
@@ -1594,12 +1613,23 @@
             }
             btn.textContent = '验证邀请码...';
             try {
+                // 如果后端还没连上，等待最多15秒
                 if(!supabase){
-                    errEl.textContent = '后端服务未连接，请检查网络后重试';
-                    errEl.classList.remove('hidden');
-                    btn.textContent = '注册';
-                    btn.disabled = false;
-                    return;
+                    btn.textContent = '连接后端中...';
+                    await new Promise(function(resolve, reject){
+                        var start = Date.now();
+                        var timer = setInterval(function(){
+                            if(supabase){ clearInterval(timer); resolve(); }
+                            if(Date.now() - start > 15000){ clearInterval(timer); reject(new Error('timeout')); }
+                        }, 500);
+                    });
+                    if(!supabase){
+                        errEl.textContent = '后端连接超时(15秒)，请检查网络后点重试';
+                        errEl.classList.remove('hidden');
+                        btn.textContent = '重试';
+                        btn.disabled = false;
+                        return;
+                    }
                 }
                 var check = await supabase.rpc('validate_invite', { p_code: inviteCode });
                 if(check.error){
@@ -1619,9 +1649,13 @@
                 }
             } catch(e) {
                 console.error('[邀请码] 验证失败:', e);
-                errEl.textContent = '邀请码验证失败: ' + (e.message || '未知错误');
+                if(e.message === 'timeout'){
+                    errEl.textContent = '后端连接超时(15秒)，请检查网络后点重试';
+                } else {
+                    errEl.textContent = '邀请码验证失败: ' + (e.message || '未知错误');
+                }
                 errEl.classList.remove('hidden');
-                btn.textContent = '注册';
+                btn.textContent = '重试';
                 btn.disabled = false;
                 return;
             }
@@ -3726,9 +3760,9 @@ function renderBProfile(){
                         }).catch(function(){});
                     }catch(e){}
                 }
-                if(retryCount>10){
+                if(retryCount>20){
                     clearInterval(retryTimer);
-                    console.log('[后端] Supabase SDK加载超时，使用本地模式');
+                    console.log('[后端] Supabase SDK加载超时(20s)，使用本地模式');
                 }
             },1000);
         }
