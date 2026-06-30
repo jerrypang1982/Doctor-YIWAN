@@ -1594,8 +1594,23 @@
             }
             btn.textContent = '验证邀请码...';
             try {
+                if(!supabase){
+                    errEl.textContent = '后端服务未连接，请检查网络后重试';
+                    errEl.classList.remove('hidden');
+                    btn.textContent = '注册';
+                    btn.disabled = false;
+                    return;
+                }
                 var check = await supabase.rpc('validate_invite', { p_code: inviteCode });
-                if (check.error || !check.data || !check.data.valid) {
+                if(check.error){
+                    console.error('[邀请码] RPC错误:', check.error);
+                    errEl.textContent = '邀请码服务异常: ' + (check.error.message || check.error.code || '未知错误');
+                    errEl.classList.remove('hidden');
+                    btn.textContent = '注册';
+                    btn.disabled = false;
+                    return;
+                }
+                if (!check.data || !check.data.valid) {
                     errEl.textContent = (check.data && check.data.message) || '邀请码无效';
                     errEl.classList.remove('hidden');
                     btn.textContent = '注册';
@@ -1604,7 +1619,7 @@
                 }
             } catch(e) {
                 console.error('[邀请码] 验证失败:', e);
-                errEl.textContent = '邀请码验证服务暂不可用，请稍后重试';
+                errEl.textContent = '邀请码验证失败: ' + (e.message || '未知错误');
                 errEl.classList.remove('hidden');
                 btn.textContent = '注册';
                 btn.disabled = false;
