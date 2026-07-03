@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -517,6 +518,73 @@
 
 
 
+
+    // ====== 本地认证服务（LocalAuth）- v2.0 ======
+    const LocalAuth = {
+        _codes: ["2DXBAQL8","364WJSBM","38CZQ6JC","3B6FBBRV","3MGFHPQS","3NKZA54R","3NX2DU2G","3X98LJ52","3Z6PLN5D","53GPDCWS","57KMJFAX","5G329QP4","5TB9VS8B","7ESVYLKK","83ZBSH4G","8RJRHKUV","8ZTDK4ZC","94SATKXL","98RV6PW9","9ZU9E42A","A2CT49GU","A5SB33RP","A8NQTJKG","A9GAHCCC","ABM5NCTD","AZLS6MJU","B3BX4BUY","BBGCZGL6","BY24E4AP","C34LUJB7","DGG8EHK2","DS2TDNHP","DVBJHEEE","E5HT6EBR","EJ58Q87D","ES6UMR6X","F65X45C4","FAS3MHMK","FQ72FNAX","GQYBVCUX","GRDWD4YB","HTCKTLUX","J8W5WLBV","JR6TLVCY","JTYWTTW5","JVXAGHTS","KVULMQMC","L5AJYXY3","LKJZ2ZSM","LRH4ZF2C","MH26R9LK","NM69NJDF","NQM6C99U","P4QACPDG","PTB6Q8BK","QFFLN49L","QHY6DYAW","QL48HBVG","QXSULYQL","QZDNQ5YV","R3R4DAYT","R3TYQRKG","RLF6AYEH","RZF96SEP","SEA2K7J6","SGFBQC77","SLZAX5T8","SRZ4H6FT","STET4DEK","TAJK8YWC","TCWPG8X3","TEKTHUSZ","TJAB4JZN","TPW9P788","U56MBNXH","U7VPZBA8","ULXQYXMM","UMNQC9KU","UZABK42Q","VL26TZWK","VR98ZSGK","VT3YY2VJ","VUYMLLWU","WCSUCUAC","WDJUZLZ4","WHQG98HS","WJW3JVPP","WK2PLS7E","WVBPT59T","X3Y5FEQZ","XETC6BUC","XLWM5LGF","XQYTS8VQ","XUEK426Z","XUWZ35UD","YDHCQ5U4","YZB9VB39","Z2RZVYJN","ZAK8NURJ","ZMZUHGK4"],
+        _MAX_USES: 10,
+        _EXPIRY: new Date("2026-07-25T23:59:59+08:00").getTime(),
+        _getUsage: function() { try { return JSON.parse(localStorage.getItem("dy_invite_usage") || "{}"); } catch(e) { return {}; } },
+        _saveUsage: function(u) { localStorage.setItem("dy_invite_usage", JSON.stringify(u)); },
+        validateInvite: function(code) {
+            code = (code || "").trim().toUpperCase();
+            if (!code) return { valid: false, message: "请输入邀请码" };
+            if (this._codes.indexOf(code) === -1) return { valid: false, message: "邀请码无效" };
+            if (Date.now() > this._EXPIRY) return { valid: false, message: "邀请码已过期" };
+            var usage = this._getUsage();
+            var used = (usage[code] || []).length;
+            if (used >= this._MAX_USES) return { valid: false, message: "该邀请码已达使用上限" };
+            return { valid: true, remaining: this._MAX_USES - used };
+        },
+        useInvite: function(code, email) {
+            code = (code || "").trim().toUpperCase();
+            var usage = this._getUsage();
+            if (!usage[code]) usage[code] = [];
+            usage[code].push({ email: email, time: new Date().toISOString() });
+            this._saveUsage(usage);
+        },
+        _hash: function(s) {
+            var h = 0;
+            for (var i = 0; i < s.length; i++) { h = ((h << 5) - h + s.charCodeAt(i)) | 0; }
+            return "lh_" + Math.abs(h).toString(36) + "_" + s.length;
+        },
+        register: function(email, password) {
+            email = (email || "").trim().toLowerCase();
+            if (!email || !password) return { ok: false, msg: "请填写邮箱和密码" };
+            if (password.length < 6) return { ok: false, msg: "密码至少6位" };
+            var users = this._getUsers();
+            if (users[email]) return { ok: false, msg: "该邮箱已注册，请直接登录" };
+            var uid = "local_" + Date.now() + "_" + Math.random().toString(36).substr(2, 8);
+            users[email] = { id: uid, email: email, passwordHash: this._hash(password), nickname: email.split("@")[0], createdAt: new Date().toISOString() };
+            this._saveUsers(users);
+            this._setCurrent(email);
+            return { ok: true, msg: "注册成功", userId: uid };
+        },
+        login: function(email, password) {
+            email = (email || "").trim().toLowerCase();
+            if (!email || !password) return { ok: false, msg: "请填写邮箱和密码" };
+            var users = this._getUsers();
+            var user = users[email];
+            if (!user) return { ok: false, msg: "该邮箱未注册，请先注册" };
+            if (user.passwordHash !== this._hash(password)) return { ok: false, msg: "密码错误" };
+            this._setCurrent(email);
+            return { ok: true, msg: "登录成功", userId: user.id };
+        },
+        _getUsers: function() { try { return JSON.parse(localStorage.getItem("dy_users") || "{}"); } catch(e) { return {}; } },
+        _saveUsers: function(u) { localStorage.setItem("dy_users", JSON.stringify(u)); },
+        _setCurrent: function(email) { localStorage.setItem("dy_current_user", email); },
+        getCurrentUser: function() {
+            var email = localStorage.getItem("dy_current_user");
+            if (!email) return null;
+            var users = this._getUsers();
+            var user = users[email];
+            if (!user) { localStorage.removeItem("dy_current_user"); return null; }
+            return user;
+        },
+        isLoggedIn: function() { return !!this.getCurrentUser(); },
+        logout: function() { localStorage.removeItem("dy_current_user"); }
+    };
+
     // ====== 云端数据服务（CloudDataService）======
     const CloudService = {
         _syncing: false,
@@ -546,7 +614,7 @@
                         phone: ''
                     });
                 }
-                return { ok: true, msg: '注册成功！请检查邮箱验证' };
+                return { ok: true, msg: '注册成功' };
             } catch(e) { return { ok: false, msg: '注册失败: ' + e.message }; }
         },
 
@@ -563,9 +631,9 @@
 
         // 登出
         async signOut() {
-            if (!supabase) return;
-            await supabase.auth.signOut();
+            if (supabase) { try { await supabase.auth.signOut(); } catch(e){} }
             this._currentUser = null;
+            LocalAuth.logout();
         },
 
         // 上传宠物头像到 Storage
@@ -1507,7 +1575,7 @@
         var modalDesc = document.getElementById('authModalDesc');
         if(closeBtn) closeBtn.style.display = _gateMode ? 'none' : '';
         if(modalTitle) modalTitle.textContent = _gateMode ? '🔒 内测邀请' : '☁️ 云端账号';
-        if(modalDesc) modalDesc.textContent = _gateMode ? 'Doctor亿万目前处于内测阶段，请使用邀请码注册或登录以继续使用全部功能。' : '登录后，宠物档案、疫苗记录、就诊记录自动同步到云端，换手机也不丢失。';
+        if(modalDesc) modalDesc.textContent = _gateMode ? 'Doctor亿万目前处于内测阶段，请输入邀请码注册。本地注册即可使用，无需等待网络。' : '登录后，宠物档案、疫苗记录、就诊记录自动同步到云端，换手机也不丢失。';
         document.getElementById('authModal').classList.remove('hidden');
     }
 
@@ -1520,6 +1588,23 @@
         _gateMode = false;
         document.getElementById('authModal').classList.add('hidden');
     }
+    // 后台尝试云端同步（非阻塞，失败不影响使用）
+    async function _tryCloudSyncInBackground() {
+        if (!supabase) { console.log('[CloudSync] SDK未加载，跳过'); return; }
+        try {
+            var user = LocalAuth.getCurrentUser();
+            if (!user) return;
+            var timeout = new Promise(function(_, rej) { setTimeout(function() { rej(new Error('timeout')); }, 3000); });
+            await Promise.race([
+                supabase.auth.signInWithPassword({ email: user.email, password: 'dummy' }).catch(function(){}),
+                timeout
+            ]).catch(function(){});
+            console.log('[CloudSync] 云端尝试完成');
+        } catch(e) {
+            console.log('[CloudSync] 云端同步跳过（本地模式）');
+        }
+    }
+
 
     function toggleAuthMode() {
         var inviteWrap = document.getElementById('inviteCodeWrap');
@@ -1540,7 +1625,7 @@
         var modalDesc = document.getElementById('authModalDesc');
         if(_gateMode){
             if(modalTitle) modalTitle.textContent = '🔒 内测邀请';
-            if(modalDesc) modalDesc.textContent = 'Doctor亿万目前处于内测阶段，请使用邀请码注册或登录以继续使用全部功能。';
+            if(modalDesc) modalDesc.textContent = 'Doctor亿万目前处于内测阶段，请输入邀请码注册。本地注册即可使用，无需等待网络。';
         }
     }
 
@@ -1582,93 +1667,43 @@
                 btn.disabled = false;
                 return;
             }
+            // 本地验证邀请码（不依赖云端，即时验证）
             btn.textContent = '验证邀请码...';
-            try {
-                // 如果后端还没连上，等待最多15秒
-                if(!supabase){
-                    btn.textContent = '处理中...';
-                    await new Promise(function(resolve, reject){
-                        var start = Date.now();
-                        var timer = setInterval(function(){
-                            if(supabase){ clearInterval(timer); resolve(); }
-                            if(Date.now() - start > 15000){ clearInterval(timer); reject(new Error('timeout')); }
-                        }, 500);
-                    });
-                    if(!supabase){
-                        errEl.textContent = '连接超时，请检查网络后点重试';
-                        errEl.classList.remove('hidden');
-                        btn.textContent = '重试';
-                        btn.disabled = false;
-                        return;
-                    }
-                }
-                var check = await supabase.rpc('validate_invite', { p_code: inviteCode });
-                if(check.error){
-                    console.error('[邀请码] RPC错误:', check.error);
-                    errEl.textContent = '邀请码服务异常: ' + (check.error.message || check.error.code || '未知错误');
-                    errEl.classList.remove('hidden');
-                    btn.textContent = '注册';
-                    btn.disabled = false;
-                    return;
-                }
-                if (!check.data || !check.data.valid) {
-                    errEl.textContent = (check.data && check.data.message) || '邀请码无效';
-                    errEl.classList.remove('hidden');
-                    btn.textContent = '注册';
-                    btn.disabled = false;
-                    return;
-                }
-            } catch(e) {
-                console.error('[邀请码] 验证失败:', e);
-                if(e.message === 'timeout'){
-                    errEl.textContent = '连接超时，请检查网络后点重试';
-                } else {
-                    errEl.textContent = '邀请码验证失败: ' + (e.message || '未知错误');
-                }
+            var inviteCheck = LocalAuth.validateInvite(inviteCode);
+            if (!inviteCheck.valid) {
+                errEl.textContent = inviteCheck.message || '邀请码无效';
                 errEl.classList.remove('hidden');
-                btn.textContent = '重试';
+                btn.textContent = '注册';
                 btn.disabled = false;
                 return;
             }
-            // 邀请码有效，执行注册
+            // 本地注册（存localStorage，即时完成）
             btn.textContent = '注册中...';
-            result = await CloudService.signUp(email, password);
-            // 注册成功后消费邀请码
+            result = LocalAuth.register(email, password);
+            // 消费邀请码
             if (result.ok) {
-                try {
-                    await supabase.rpc('use_invite', { p_code: inviteCode });
-                } catch(e) { console.warn('[邀请码] 消费失败:', e); }
+                LocalAuth.useInvite(inviteCode, email);
             }
         } else {
-            result = await CloudService.signIn(email, password);
+            // 本地登录
+            result = LocalAuth.login(email, password);
         }
 
         btn.disabled = false;
 
         if (result.ok) {
+            // 设置CloudService._currentUser以兼容UI显示
+            var _lu = LocalAuth.getCurrentUser();
+            if(_lu) CloudService._currentUser = { email: _lu.email, id: _lu.id };
             if (_authMode === 'register') {
-                showToast('注册成功！请验证邮箱后登录');
-                _authMode = 'login';
-                // 门控模式下：注册后切换到登录模式，不关闭弹窗
-                if(_gateMode){
-                    toggleAuthMode(); // 切到login
-                    // 保持gate模式
-                    _gateMode = true;
-                    var closeBtn2 = document.getElementById('authCloseBtn');
-                    if(closeBtn2) closeBtn2.style.display = 'none';
-                    var mt2 = document.getElementById('authModalTitle');
-                    var md2 = document.getElementById('authModalDesc');
-                    if(mt2) mt2.textContent = '🔒 内测邀请';
-                    if(md2) md2.textContent = 'Doctor亿万目前处于内测阶段，请使用邀请码注册或登录以继续使用全部功能。';
-                } else {
-                    closeAuthModal();
-                }
-            } else {
-                showToast('登录成功！正在同步数据...');
-                // 登录成功：关闭门控
+                showToast('注册成功！欢迎使用 Doctor亿万');
                 dismissGate();
-                // 登录成功后加载云端数据
-                await loadCloudDataOnLogin();
+                _tryCloudSyncInBackground();
+                showCPage('home');
+            } else {
+                showToast('登录成功！');
+                dismissGate();
+                _tryCloudSyncInBackground();
                 showCPage('profile');
             }
         } else {
@@ -2061,8 +2096,8 @@
     // ====== C端 - 我的 ======
     function renderCProfile(){
         const u=appData.user;
-        const isLoggedIn=!!CloudService._currentUser;
-        const userEmail=(CloudService._currentUser && CloudService._currentUser.email)||'';
+        const isLoggedIn=!!(LocalAuth.isLoggedIn()||CloudService._currentUser);
+        const userEmail=(LocalAuth.getCurrentUser()?LocalAuth.getCurrentUser().email:(CloudService._currentUser&&CloudService._currentUser.email)||'');
         const alipayBound=u.alipayBound;
         const wechatBound=u.wechatBound;
         const alipayInsurance=u.alipayInsurance||null;
@@ -3711,50 +3746,37 @@ function renderBProfile(){
             var cc = document.getElementById('cContent');
             if(cc) cc.innerHTML = '<div style="padding:40px;text-align:center;color:#666"><p>页面加载出错，请刷新重试</p></div>';
         }
-        // ====== 内测门控：未登录用户必须先注册/登录才能使用 ======
-        showAuthModal(true);
-        // 第二步：Supabase 初始化（SDK已内嵌，立即可用）
+        // ====== v2.0 本地优先模式 ======
+        if(LocalAuth.isLoggedIn()){
+            var _lu2 = LocalAuth.getCurrentUser();
+            CloudService._currentUser = { email: _lu2.email, id: _lu2.id };
+            console.log('[Gate] 本地用户已登录，自动解锁:', _lu2.email);
+        } else {
+            showAuthModal(true);
+        }
+        // Supabase 初始化（可选，用于后续云端同步）
         try{initSupabase();}catch(e){console.error('[后端] 初始化失败:',e);}
-        // SDK就绪后检查登录状态，已登录则自动解锁
-        if(window.supabase){
+        // 后台尝试云端同步（不阻塞）
+        if(LocalAuth.isLoggedIn() && window.supabase){
+            _tryCloudSyncInBackground();
             try{
-                CloudService.checkAuth().then(function(u){
-                    if(u){ dismissGate(); console.log('[Gate] 已登录用户，自动解锁'); }
+                CloudService.checkAuth().then(function(user){
+                    if(user){
+                        CloudService.loadFromCloud().then(function(cloudData){
+                            if(cloudData && cloudData.pets && cloudData.pets.length > 0){
+                                var lpid = (appData.pets||[]).map(function(p){return p.id;});
+                                for(var ci=0;ci<cloudData.pets.length;ci++){
+                                    var cp=cloudData.pets[ci];
+                                    if(lpid.indexOf(cp.id)===-1) appData.pets.push(cp);
+                                }
+                                save();
+                                console.log('[Cloud] 云端数据已合并');
+                            }
+                        }).catch(function(){});
+                    }
                 }).catch(function(){});
             }catch(e){}
         }
-        // 检查云端登录状态（v1.4.0: 加 try/catch 防止云端错误影响页面）
-        try{
-            if(supabase){
-                CloudService.checkAuth().then(function(user){
-                    if(user){
-                        console.log('[Cloud] 已登录:', user.email);
-                        dismissGate(); // 已登录，解锁APP
-                        CloudService.loadFromCloud().then(function(cloudData){
-                            if(cloudData && cloudData.pets && cloudData.pets.length > 0){
-                                var localPetIds = (appData.pets||[]).map(function(p){return p.id;});
-                                for(var ci=0; ci<cloudData.pets.length; ci++){
-                                    var cp = cloudData.pets[ci];
-                                    if(localPetIds.indexOf(cp.id)===-1) appData.pets.push(cp);
-                                }
-                                var cloudVacKeys = (appData.vaccinations||[]).map(function(v){return v.petId+'|'+v.name+'|'+v.date;});
-                                for(var vi=0; vi<(cloudData.vaccinations||[]).length; vi++){
-                                    var cv = cloudData.vaccinations[vi];
-                                    if(cloudVacKeys.indexOf(cv.petId+'|'+cv.name+'|'+cv.date)===-1) appData.vaccinations.push(cv);
-                                }
-                                var cloudRecKeys = (appData.medicalRecords||[]).map(function(r){return r.petId+'|'+r.service+'|'+r.date;});
-                                for(var ri=0; ri<(cloudData.medicalRecords||[]).length; ri++){
-                                    var cr = cloudData.medicalRecords[ri];
-                                    if(cloudRecKeys.indexOf(cr.petId+'|'+cr.service+'|'+cr.date)===-1) appData.medicalRecords.push(cr);
-                                }
-                                save();
-                                console.log('[Cloud] 数据已合并');
-                            }
-                        }).catch(function(e){console.error('[Cloud] 加载云端数据失败:',e);});
-                    }
-                }).catch(function(e){console.error('[Cloud] 检查登录状态失败:',e);});
-            }
-        }catch(e){console.error('[Cloud] 云端初始化异常:',e);}
         // 1. 先用缓存位置更新首页UI（v1.4.0: try/catch 包裹）
         try{
             if(restoreUserLocation()){
